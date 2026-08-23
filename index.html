@@ -162,6 +162,14 @@
     padding: 6px 20px; font-size: 12.5px; color: #3730a3;
   }
   #asBar.show { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  #asBar.jahelp { background: #fef3c7; border-bottom-color: #fcd34d; color: #92400e; }
+  #hintBox {
+    display: none; margin: 4px 0 8px; padding: 9px 13px; font-size: 14px;
+    background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; color: #92400e;
+  }
+  #hintBox.show { display: block; }
+  #hintBox .skel { font-size: 16px; letter-spacing: .5px; color: #1f2937; font-weight: 700; }
+  #hintBox .lv { font-size: 11px; font-weight: 700; color: #b45309; }
   #asHeard { font-weight: 700; transition: opacity .4s; }
   @media (max-width: 720px) {
     #asBtn { padding: 8px 12px; font-size: 12px; }
@@ -266,6 +274,7 @@
   <div id="panelInner">
     <div id="panelStatus"></div>
     <div id="micState"></div>
+    <div id="hintBox"></div>
     <div id="recognized"></div>
     <div id="panelBtns">
       <button class="btn btn-ghost" id="btnReplay">🔊 もう一度聞く</button>
@@ -3775,6 +3784,7 @@ function setMicState(kind) {
 // 聞き取りを始める／張り直す
 function startListening() {
   if (!micWanted || ttsBusy || !micAvailable()) return;
+  if (jaHelp) return;   // 日本語ヘルプ中は英語の判定を動かさない（認識は1つだけ）
   if (Date.now() - micSince > IDLE_MIC_MS) {   // 長時間無言なら止める
     micWanted = false;
     setMicState("paused");
@@ -3869,13 +3879,45 @@ let asPending = null;    // 「はい」で実行する確認待ちの内容
 let asPendingAt = 0;
 let asSince = 0;         // 無音の起点（長時間無音なら自動で止める）
 
+// 英語判定中に日本語で助けを求めるためのモード。
+// 音声認識は一度に1言語しか動かせないので、合図で日本語に切り替える。
+let jaHelp = false;
+let jaHelpTimer = null;
+const JA_HELP_MS = 30000;   // この時間だけ日本語で聞ける（発話ごとに延長）
+
+function enterJaHelp() {
+  if (jaHelp) { bumpJaHelp(); return; }
+  jaHelp = true;
+  pauseListening();          // 英語の判定を止める
+  setMicState("");
+  updateAsBar();
+  speakJa("日本語でどうぞ。", () => { bumpJaHelp(); asMaybeListen(); });
+}
+
+function bumpJaHelp() {
+  if (jaHelpTimer) clearTimeout(jaHelpTimer);
+  jaHelpTimer = setTimeout(() => { if (jaHelp) exitJaHelp(true); }, JA_HELP_MS);
+}
+
+function exitJaHelp(announce) {
+  if (!jaHelp) return;
+  jaHelp = false;
+  if (jaHelpTimer) { clearTimeout(jaHelpTimer); jaHelpTimer = null; }
+  asPause();
+  updateAsBar();
+  const back = () => { if (micWanted) startListening(); else asMaybeListen(); };
+  if (announce) speakJa("英語に戻ります。どうぞ。", back);
+  else back();
+}
+
 function asPause() {
   if (asRecog) { const old = asRecog; asRecog = null; try { old.abort(); } catch {} }
 }
 
 function asMaybeListen() {
   updateAsBar();
-  if (!assistantOn || !micAvailable() || ttsBusy || micWanted || asRecog) return;
+  if (!assistantOn || !micAvailable() || ttsBusy || asRecog) return;
+  if (micWanted && !jaHelp) return;   // 英語判定中は動かさない（日本語ヘルプ中だけ例外）
   if (Date.now() - asSince > IDLE_MIC_MS) {   // 長時間無音なら止める（開きっぱなし防止）
     setAssistant(false);
     showAsHeard("しばらく無音だったため音声操作を止めました");
@@ -3912,10 +3954,22 @@ function asMaybeListen() {
   updateAsBar();
 }
 
+let asWatchdog = null;
+
 function setAssistant(on) {
   assistantOn = on;
-  if (on) { asSince = Date.now(); asMaybeListen(); }
-  else { asPause(); asPending = null; }
+  if (on) {
+    asSince = Date.now();
+    asMaybeListen();
+    // 読み上げの終了通知が届かない環境でも聞き取りが再開するよう、
+    // 定期的に張り直しを試みる（asMaybeListen は条件を満たさなければ何もしない）
+    if (!asWatchdog) asWatchdog = setInterval(asMaybeListen, 1500);
+  } else {
+    asPause();
+    asPending = null;
+    if (jaHelp) { jaHelp = false; if (jaHelpTimer) clearTimeout(jaHelpTimer); jaHelpTimer = null; }
+    if (asWatchdog) { clearInterval(asWatchdog); asWatchdog = null; }
+  }
   updateAsBar();
 }
 
@@ -3925,11 +3979,13 @@ function updateAsBar() {
   btn.classList.toggle("on", assistantOn);
   btn.textContent = assistantOn ? "🎙 音声操作 ON" : "🎙 音声操作";
   bar.classList.toggle("show", assistantOn);
+  bar.classList.toggle("jahelp", jaHelp);
   if (!assistantOn) return;
   let hint;
-  if (asPending) hint = "「はい」で実行、「いいえ」で取り消し";
-  else if (practice && micWanted) hint = '英語で：I don\'t know ／ hint ／ in Japanese ／ what does ○○ mean ／ one more time ／ slower ／ next ／ stop';
-  else if (practice) hint = "「わからない」「ヒント」「日本語で」「もう一度」「ゆっくり」「次へ」「終了」";
+  if (jaHelp) hint = "日本語でどうぞ：「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「答え」／「戻る」で英語に復帰";
+  else if (asPending) hint = "「はい」で実行、「いいえ」で取り消し";
+  else if (practice && micWanted) hint = "困ったら「ヘルプ」と言えば日本語で聞けます（英語では help / hint / in Japanese / next / stop）";
+  else if (practice) hint = "「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「わからない」「日本語で」「もう一度」「次へ」「終了」";
   else if (view.page === "home") hint = "カテゴリ名（「病院」など）か、やりたいシーン名を話しかけてください";
   else if (view.page === "scenes") hint = "シーン名を言うと確認して開始します。「戻る」も使えます";
   else hint = "「開始」で練習を始めます。「戻る」「次のシーン」も使えます";
@@ -4008,6 +4064,144 @@ function runPendingScene(pn) {
   });
 }
 
+// ============================================================
+// 段階ヒント
+//   1回目=出だしと語数 → 2回目=使う単語 → 3回目=前置詞 → 4回目=答え
+//   「前置詞は？」「単語は？」など、直接その種類を聞くこともできる。
+// ============================================================
+const PREPS = new Set(["in","on","at","for","to","from","with","of","about","by","into",
+  "over","under","after","before","during","between","through","without","around","near",
+  "past","up","down","off","out","as","like","onto","upon","along","behind","below","above"]);
+// 骨組みで残す語（機能語）。ここを残すと「何を埋めればよいか」が見える
+const KEEPW = new Set(["a","an","the","i","you","he","she","it","we","they","me","my","your",
+  "his","her","its","our","their","this","that","these","those","is","are","am","was","were",
+  "be","been","do","does","did","have","has","had","will","would","can","could","should",
+  "may","might","must","not","and","or","but","if","so","there","here","what","when","where",
+  "who","which","how","why","please","yes","no","i'm","it's","that's","don't","doesn't",
+  "isn't","aren't","can't","won't","i'd","i'll","i've","let","us","one","some","any","all"]);
+
+function sentWords(en) { return en.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []; }
+
+// その文の中で辞書が熟語として拾った見出しを返す（既存の照合をそのまま使う）
+function matchedPhrases(en) {
+  if (!dictReady) return [];
+  const d = document.createElement("div");
+  d.innerHTML = markup(en);
+  return [...d.querySelectorAll(".w.ph")].map(el => el.dataset.k)
+    .filter((k, i, a) => a.indexOf(k) === i);
+}
+
+// 内容語（動詞・名詞など）を伏せた骨組み。前置詞と機能語は残す
+function skeleton(en) {
+  return en.replace(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g, (w) => {
+    const k = w.toLowerCase();
+    if (KEEPW.has(k) || PREPS.has(k)) return w;
+    return w[0] + "_".repeat(Math.max(1, w.length - 1));
+  });
+}
+
+function contentWords(en) {
+  const out = [];
+  sentWords(en).forEach(w => {
+    const k = norm(w);
+    if (KEEPW.has(k) || PREPS.has(k)) return;
+    if (out.some(x => norm(x) === k)) return;
+    out.push(w);
+  });
+  return out;
+}
+
+function hintStart(t) {
+  const w = sentWords(t.en);
+  const head = t.en.split(/\s+/).slice(0, 2).join(" ");
+  return { say: w.length + "語の文です。" + head + " で始まります。", show: skeleton(t.en) };
+}
+
+function hintWords(t) {
+  const cw = contentWords(t.en).slice(0, 4);
+  const parts = cw.map(w => {
+    const f = dictReady ? lookupWord(w) : null;
+    return f ? w + "、" + f.e[0].split(/[／/(（]/)[0] : w;
+  });
+  return {
+    say: parts.length ? "使う単語は、" + parts.join("。") + "。" : "特別な単語はありません。",
+    show: "使う単語：" + cw.join(" / ")
+  };
+}
+
+function hintPreps(t) {
+  const ps = sentWords(t.en).map(w => w.toLowerCase()).filter(w => PREPS.has(w));
+  if (!ps.length) return { say: "この文に前置詞はありません。", show: "前置詞なし" };
+  const uniq = [...new Set(ps)];
+  const counts = uniq.map(x => {
+    const n = ps.filter(y => y === x).length;
+    return n > 1 ? x + " を" + n + "回" : x;
+  });
+  // 前置詞を含む熟語があれば一緒に言う（丸ごと覚えるのが早いため）
+  const phKeys = matchedPhrases(t.en).filter(k => k.split(" ").some(w => PREPS.has(w)));
+  const ph = phKeys.slice(0, 2).map(k => k + "、" + (PHRASES[k] ? PHRASES[k][0].split(/[／/(（]/)[0] : ""));
+  return {
+    say: "前置詞は、" + counts.join("、") + " です。" + (ph.length ? "熟語では、" + ph.join("。") + "。" : ""),
+    show: "前置詞：" + uniq.join(" , ") + (phKeys.length ? "　熟語：" + phKeys.join(" / ") : "")
+  };
+}
+
+function showHint(h, level) {
+  const box = $("hintBox");
+  if (!box) return;
+  box.classList.add("show");
+  box.innerHTML = (level ? `<span class="lv">ヒント ${level}</span> ` : "") +
+    `<span class="skel">${esc(h.show)}</span>`;
+}
+function clearHint() {
+  const box = $("hintBox");
+  if (box) { box.classList.remove("show"); box.innerHTML = ""; }
+}
+
+// 「ヒント」を繰り返すと段階が上がる
+function asHintStep() {
+  const t = curTurn(); if (!t) return;
+  if (!practice.hintLv || practice.hintAt !== practice.idx) { practice.hintLv = 0; practice.hintAt = practice.idx; }
+  practice.hintLv++;
+  const lv = practice.hintLv;
+  if (lv === 1) { const h = hintStart(t); showHint(h, 1); speakJa(h.say); }
+  else if (lv === 2) { const h = hintWords(t); showHint(h, 2); speakJa(h.say); }
+  else if (lv === 3) { const h = hintPreps(t); showHint(h, 3); speakJa(h.say); }
+  else { speakJa("答えを読みます。", () => asAnswer()); }
+}
+
+function asHintKind(kind) {
+  const t = curTurn(); if (!t) return;
+  const h = kind === "prep" ? hintPreps(t) : kind === "words" ? hintWords(t) : hintStart(t);
+  showHint(h, null);
+  speakJa(h.say);
+}
+
+// 「◯◯って英語で何？」（日本語 → 英語の逆引き。まず今の文の中から探す）
+function asEnglishFor(termRaw) {
+  const term = normJa(termRaw);
+  if (!term) return;
+  const hit = (k, mean, where) => {
+    showHint({ show: termRaw + " → " + k }, null);
+    speakJa(where + "、" + k + " です。" + mean);
+  };
+  const t = curTurn();
+  if (t && dictReady) {
+    for (const k of matchedPhrases(t.en)) {
+      if (PHRASES[k] && normJa(PHRASES[k][0]).includes(term)) return hit(k, PHRASES[k][0], "この文では");
+    }
+    for (const w of sentWords(t.en)) {
+      const f = lookupWord(w);
+      if (f && normJa(f.e[0]).includes(term)) return hit(f.key, f.e[0], "この文では");
+    }
+  }
+  if (dictReady) {
+    for (const k in PHRASES) if (normJa(PHRASES[k][0]).includes(term)) return hit(k, PHRASES[k][0], "辞書では");
+    for (const k in WORDS) if (normJa(WORDS[k][0]).includes(term)) return hit(k, WORDS[k][0], "辞書では");
+  }
+  speakJa("辞書に見つかりませんでした。");
+}
+
 // ---- 練習中の共通アクション（日本語・英語コマンドの両方から使う） ----
 function curTurn() { return practice ? currentScene().turns[practice.idx] : null; }
 function prevPartnerTurn() {
@@ -4023,10 +4217,7 @@ function asAnswer() {   // 答えの英文を開示して読み上げる
   const el = $("en" + practice.idx); if (el) el.classList.remove("hidden-text");
   speak(t.en);
 }
-function asHint() {     // 最初の3語だけ読む（思い出しの取っかかり）
-  const t = curTurn(); if (!t) return;
-  speak(t.en.split(/\s+/).slice(0, 3).join(" "));
-}
+function asHint() { asHintStep(); }   // 段階ヒント（呼ぶたびに詳しくなる）
 function asJapanese() { // 直前の相手のセリフ（質問）を日本語で読む
   const pp = prevPartnerTurn(); const t = curTurn();
   const ja = pp ? pp.ja : (t ? t.ja : "");
@@ -4087,7 +4278,7 @@ function handleJaCommand(heard) {
   }
 
   // 練習中（マイク判定オフのとき）の日本語コマンド
-  if (practice && handlePracticeJa(q)) return;
+  if (practice && handlePracticeJa(q, heard)) return;
 
   if (/^(もどる|戻る|もどって|戻って)$/.test(q)) {
     backBtn.click();
@@ -4148,11 +4339,25 @@ function handleJaCommand(heard) {
   }
 }
 
-function handlePracticeJa(q) {
-  if (/わからない|分からない|答え|こたえ|ギブアップ/.test(q)) { asAnswer(); return true; }
-  if (/ヒント|ひんと/.test(q)) { asHint(); return true; }
-  if (/日本語|にほんご|訳して|やくして|どういう意味/.test(q)) { asJapanese(); return true; }
-  if (/もう一度|もういちど|もっかい|繰り返/.test(q)) { asRepeat(); return true; }
+function handlePracticeJa(q, raw) {
+  // 日本語ヘルプ中の「戻る／もういい」で英語に復帰
+  if (jaHelp && /^(もどる|戻る|もういい|わかった|分かった|ありがとう|ありがと|おわり|終わり|英語に戻|オッケー|おっけー)/.test(q)) {
+    exitJaHelp(true); return true;
+  }
+  // 「◯◯って英語で何？」（日本語→英語の逆引き）
+  const m = (raw || "").match(/(.+?)(?:って|は|を)?\s*(?:英語で|えいごで)(?:何|なん|どう|なんて)/);
+  if (m) { bumpJaHelp(); asEnglishFor(m[1]); return true; }
+  if (/前置詞|ぜんちし/.test(q)) { bumpJaHelp(); asHintKind("prep"); return true; }
+  if (/単語|たんご|キーワード|きーわーど/.test(q)) { bumpJaHelp(); asHintKind("words"); return true; }
+  if (/出だし|でだし|言い出|最初|さいしょ|どう始め|文の形|骨組み/.test(q)) { bumpJaHelp(); asHintKind("start"); return true; }
+  if (/わからない|分からない|答え|こたえ|ギブアップ/.test(q)) { bumpJaHelp(); asAnswer(); return true; }
+  if (/ヒント|ひんと|もっと詳しく|もうすこし|もう少し/.test(q)) { bumpJaHelp(); asHint(); return true; }
+  if (/の意味/.test(q)) {
+    const mm = (raw || "").match(/(.+?)\s*の意味/);
+    if (mm) { bumpJaHelp(); asDefine(mm[1]); return true; }
+  }
+  if (/日本語|にほんご|訳して|やくして|どういう意味/.test(q)) { bumpJaHelp(); asJapanese(); return true; }
+  if (/もう一度|もういちど|もっかい|繰り返/.test(q)) { bumpJaHelp(); asRepeat(); return true; }
   if (/^(つぎ|次|次へ|スキップ|すきっぷ)$/.test(q)) { $("btnNext").click(); return true; }
   if (/^(最初から|さいしょから|やり直し|やりなおし)$/.test(q)) { startPractice(); return true; }
   if (/終了|しゅうりょう|やめる|やめて|ストップ|停止/.test(q)) {
@@ -4168,8 +4373,15 @@ function handleEnCommand(saidRaw, t) {
   const x = saidRaw.toLowerCase().replace(/[^a-z' ]/g, " ").replace(/\s+/g, " ").trim();
   const next = () => $("btnNext").click();
   const stop = () => { stopPractice(false); speakJa("練習を終了しました。"); };
+  // 日本語ヘルプへ切り替える合図。日本語で「ヘルプ」と言っても英語認識が
+  // help と拾うことが多いので、取りこぼしを減らすため候補を広く持つ。
+  const JA_TRIGGER = ["help", "help me", "helped", "japanese", "japanese help",
+    "question", "i have a question", "wakaranai", "wakannai", "wa ka ra nai",
+    "walk around nai", "nihongo", "help nihongo", "sos", "hell", "held", "helped me"];
+  if (JA_TRIGGER.includes(x)) { showAsHeard("🎙 " + saidRaw); enterJaHelp(); return true; }
+
   const table = {
-    "i don't know": asAnswer, "i dont know": asAnswer, "help": asAnswer, "help me": asAnswer,
+    "i don't know": asAnswer, "i dont know": asAnswer, "help me please": asAnswer,
     "i give up": asAnswer, "answer": asAnswer, "answer please": asAnswer,
     "the answer": asAnswer, "play the answer": asAnswer,
     "hint": asHint, "hint please": asHint, "give me a hint": asHint,
@@ -4399,6 +4611,8 @@ function startPractice() {
 }
 
 function stopPractice(finished) {
+  if (jaHelp) { jaHelp = false; if (jaHelpTimer) clearTimeout(jaHelpTimer); jaHelpTimer = null; }
+  clearHint();
   ttsToken++;            // 進行中の読み上げの通知を無効化する
   speechSynthesis.cancel();
   ttsBusy = false;
@@ -4448,6 +4662,7 @@ function playTurn() {
   const t = scene.turns[practice.idx];
   highlight(practice.idx);
   $("recognized").innerHTML = "";
+  clearHint();
 
   if (t.s === "p") {
     setStatus("🔊 相手が話しています…");
