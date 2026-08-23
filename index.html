@@ -150,6 +150,24 @@
   }
   .done-badge { color: var(--ok); font-weight: 700; }
 
+  /* ---- 音声アシスタント ---- */
+  #asBtn {
+    margin-left: auto; border: 1px solid var(--border); background: var(--card);
+    color: var(--ink); border-radius: 999px; padding: 6px 14px;
+    cursor: pointer; font-size: 13px; white-space: nowrap;
+  }
+  #asBtn.on { background: var(--ng); color: #fff; border-color: var(--ng); }
+  #asBar {
+    display: none; background: #eef2ff; border-bottom: 1px solid #c7d2fe;
+    padding: 6px 20px; font-size: 12.5px; color: #3730a3;
+  }
+  #asBar.show { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  #asHeard { font-weight: 700; transition: opacity .4s; }
+  @media (max-width: 720px) {
+    #asBtn { padding: 8px 12px; font-size: 12px; }
+    #asBar { padding: 6px 12px; }
+  }
+
   /* ---- 単語ホバー辞書 ---- */
   .w { border-radius: 3px; padding: 0 1px; }
   .w.has { border-bottom: 1px dotted #9ca3af; cursor: help; }
@@ -237,7 +255,10 @@
   <button id="backBtn" style="display:none">← 戻る</button>
   <h1>英会話ロールプレイ</h1>
   <span id="crumb"></span>
+  <button id="asBtn" title="音声でアプリを操作する">🎙 音声操作</button>
 </header>
+
+<div id="asBar"><span id="asHeard"></span><span id="asHint"></span></div>
 
 <main id="main"></main>
 
@@ -3641,11 +3662,14 @@ window.addEventListener("orientationchange", hideTip);
 
 // ---- 音声合成（TTS） ----
 let enVoice = null;
+let jaVoice = null;
 function pickVoice() {
   const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
   enVoice =
     vs.find(v => /Natural|Online/.test(v.name) && v.lang === "en-US") ||
     vs.find(v => v.lang === "en-US") || vs[0] || null;
+  const js = speechSynthesis.getVoices().filter(v => v.lang.startsWith("ja"));
+  jaVoice = js.find(v => /Natural|Online/.test(v.name)) || js[0] || null;
 }
 speechSynthesis.onvoiceschanged = pickVoice;
 pickVoice();
@@ -3667,29 +3691,39 @@ function unlockTTS() {
 let ttsToken = 0;        // 読み上げの世代番号。cancel() で消えた古い読み上げの通知を無視するため
 let partnerPending = null;  // 相手のセリフを読み上げ中のターン番号（割り込まれたら読み直す）
 
-function speak(text, onend) {
+function speak(text, onend) { return speakCore(text, onend, "en"); }
+function speakJa(text, onend) { return speakCore(text, onend, "ja"); }
+
+function speakCore(text, onend, lang) {
   const token = ++ttsToken;
   // 相手が話している最中に別の音声（辞書の例文など）を鳴らすと、相手のセリフが
   // 途中で切れてしまう。その場合は割り込みが終わってから最初から読み直す。
   const interrupted = partnerPending;
-  // 自分のターン中に読み上げると、スピーカーから出た音を自分の発話として拾ってしまう。
-  // 読み上げの間だけ聞き取りを止め、終わったら再開する。
+  // 読み上げ中は、スピーカーから出た音を発話として拾わないよう聞き取りを止める。
   const resume = micWanted;
   ttsBusy = true;
   pauseListening();
+  asPause();
   if (resume) setMicState("tts");
 
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = "en-US";
-  if (enVoice) u.voice = enVoice;
-  u.rate = settings.rate;
+  if (lang === "ja") {
+    u.lang = "ja-JP";
+    if (jaVoice) u.voice = jaVoice;
+    u.rate = 1.0;
+  } else {
+    u.lang = "en-US";
+    if (enVoice) u.voice = enVoice;
+    u.rate = settings.rate;
+  }
 
   const finish = () => {
     if (token !== ttsToken) return;   // 既に別の読み上げに切り替わっている
     ttsBusy = false;
     if (onend) onend();
     if (resume && micWanted) setTimeout(startListening, 250);
+    else setTimeout(asMaybeListen, 250);   // 音声操作の聞き取りに戻す
     if (interrupted !== null && practice && practice.idx === interrupted) {
       setTimeout(playTurn, 300);      // 割り込みで切れた相手のセリフを読み直す
     }
@@ -3747,6 +3781,7 @@ function startListening() {
     setBtns({ replay: true, answer: true, reveal: settings.mode === "hide", retry: true, next: true });
     return;
   }
+  asPause();   // 音声認識は同時に1つしか動かせないため、先にアシスタント側を止める
   if (recog) { const old = recog; recog = null; try { old.abort(); } catch {} }
 
   const t = micTurn;
@@ -3761,7 +3796,14 @@ function startListening() {
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) {
         const said = (e.results[i][0].transcript || "").trim();
-        if (said) { micFails = 0; showFeedback(said, t); return; }
+        if (said) {
+          micFails = 0;
+          // 音声操作がオンなら、発話をまずコマンドとして解釈する
+          // （英語判定が動いている間はコマンドも英語で受ける。完全一致のみ）
+          if (assistantOn && handleEnCommand(said, t)) return;
+          showFeedback(said, t);
+          return;
+        }
       }
     }
   };
@@ -3809,12 +3851,373 @@ function stopListening() {
   micTurn = null;
   pauseListening();
   setMicState("");
+  setTimeout(asMaybeListen, 300);   // マイクが空いたら音声操作の聞き取りに戻す
 }
+
+// ============================================================
+// 音声アシスタント（音声でアプリを操作する）
+//
+// 制約：ブラウザの音声認識は一度に1つ・1言語しか動かせない。そこで
+//   ・メニュー画面や、マイク判定オフの練習中 → 日本語コマンドで聞き取る
+//   ・マイク判定オンの自分のターン → 英語判定が動いているため、
+//     コマンドも英語（I don't know / hint / in Japanese など）で受ける
+// マイクを勝手に開かないよう、毎回ボタンで明示的にオンにする（保存しない）。
+// ============================================================
+let assistantOn = false;
+let asRecog = null;      // アシスタント用の認識インスタンス（日本語）
+let asPending = null;    // 「はい」で実行する確認待ちの内容
+let asPendingAt = 0;
+let asSince = 0;         // 無音の起点（長時間無音なら自動で止める）
+
+function asPause() {
+  if (asRecog) { const old = asRecog; asRecog = null; try { old.abort(); } catch {} }
+}
+
+function asMaybeListen() {
+  updateAsBar();
+  if (!assistantOn || !micAvailable() || ttsBusy || micWanted || asRecog) return;
+  if (Date.now() - asSince > IDLE_MIC_MS) {   // 長時間無音なら止める（開きっぱなし防止）
+    setAssistant(false);
+    showAsHeard("しばらく無音だったため音声操作を止めました");
+    return;
+  }
+  const r = new SR();
+  r.lang = "ja-JP";
+  r.continuous = true;
+  r.interimResults = false;
+  r.maxAlternatives = 1;
+  r.onresult = (e) => {
+    if (asRecog !== r) return;
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        const heard = (e.results[i][0].transcript || "").trim();
+        if (heard) { asSince = Date.now(); handleJaCommand(heard); return; }
+      }
+    }
+  };
+  r.onerror = (e) => {
+    if (asRecog !== r) return;
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+      setAssistant(false);
+      showAsHeard("⚠ マイクが使えないため音声操作を止めました");
+    }
+  };
+  r.onend = () => {
+    if (asRecog !== r) return;   // 自分で止めた分は張り直さない
+    asRecog = null;
+    setTimeout(asMaybeListen, 250);
+  };
+  asRecog = r;
+  try { r.start(); } catch { asRecog = null; }
+  updateAsBar();
+}
+
+function setAssistant(on) {
+  assistantOn = on;
+  if (on) { asSince = Date.now(); asMaybeListen(); }
+  else { asPause(); asPending = null; }
+  updateAsBar();
+}
+
+function updateAsBar() {
+  const bar = $("asBar"), btn = $("asBtn");
+  if (!bar || !btn) return;
+  btn.classList.toggle("on", assistantOn);
+  btn.textContent = assistantOn ? "🎙 音声操作 ON" : "🎙 音声操作";
+  bar.classList.toggle("show", assistantOn);
+  if (!assistantOn) return;
+  let hint;
+  if (asPending) hint = "「はい」で実行、「いいえ」で取り消し";
+  else if (practice && micWanted) hint = '英語で：I don\'t know ／ hint ／ in Japanese ／ what does ○○ mean ／ one more time ／ slower ／ next ／ stop';
+  else if (practice) hint = "「わからない」「ヒント」「日本語で」「もう一度」「ゆっくり」「次へ」「終了」";
+  else if (view.page === "home") hint = "カテゴリ名（「病院」など）か、やりたいシーン名を話しかけてください";
+  else if (view.page === "scenes") hint = "シーン名を言うと確認して開始します。「戻る」も使えます";
+  else hint = "「開始」で練習を始めます。「戻る」「次のシーン」も使えます";
+  $("asHint").textContent = hint;
+}
+
+function showAsHeard(text) {
+  const el = $("asHeard");
+  if (!el) return;
+  el.textContent = text;
+  el.style.opacity = 1;
+  setTimeout(() => { el.style.opacity = .55; }, 1800);
+}
+
+// ---- 日本語の言い回しの照合 ----
+function normJa(x) {
+  return x.toLowerCase().replace(/[\s。、．，,.・「」『』（）()？！?!…〜ー]/g, "");
+}
+function bigrams(x) { const g = new Set(); for (let i = 0; i < x.length - 1; i++) g.add(x.slice(i, i + 2)); return g; }
+function jaSim(a, b) {
+  a = normJa(a); b = normJa(b);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.includes(b) || b.includes(a)) return 0.9;
+  const A = bigrams(a), B = bigrams(b);
+  let hit = 0; A.forEach(g => { if (B.has(g)) hit++; });
+  return hit / Math.max(1, Math.min(A.size, B.size));
+}
+
+const CAT_ALIAS = {
+  shopping: ["買い物", "かいもの", "ショッピング"],
+  friends: ["友達との会話", "友達", "ともだち", "友達との"],
+  work: ["職場でのやり取り", "職場", "しょくば", "仕事"],
+  travel: ["旅行", "りょこう"],
+  hospital: ["病院", "びょういん"],
+};
+
+function findCategory(raw) {
+  const q = normJa(raw.replace(/(に|へ)?(移動して|移動|行って|開いて|して)$/, ""));
+  if (!q) return null;
+  for (const c of DATA) {
+    const names = [c.name].concat(CAT_ALIAS[c.id] || []);
+    if (names.some(n => normJa(n) === q)) return c;
+  }
+  for (const c of DATA) {
+    const names = [c.name].concat(CAT_ALIAS[c.id] || []);
+    if (names.some(n => jaSim(q, n) >= 0.7)) return c;
+  }
+  return null;
+}
+
+function findScene(raw) {
+  const q = raw.replace(/(が|を)?(やりたい|したい)(です)?$/, "")
+               .replace(/(を)?(開いて|お願いします|お願い|やって|して)$/, "");
+  if (normJa(q).length < 2) return null;
+  let best = null;
+  DATA.forEach(c => c.scenes.forEach(sc => {
+    const score = jaSim(q, sc.name) + (c.id === view.cat ? 0.05 : 0);
+    if (!best || score > best.score) best = { cat: c.id, scene: sc.id, name: sc.name, score };
+  }));
+  return best && best.score >= 0.3 ? best : null;
+}
+
+function nextSceneAfter(catId, sceneId) {
+  const c = DATA.find(x => x.id === catId);
+  if (!c) return null;
+  const i = c.scenes.findIndex(sc => sc.id === sceneId);
+  return (i >= 0 && i + 1 < c.scenes.length) ? c.scenes[i + 1] : null;
+}
+
+function runPendingScene(pn) {
+  view = { page: "dialogue", cat: pn.cat, scene: pn.scene, q: "" };
+  render();
+  speakJa(pn.name + "を始めます。", () => {
+    if (view.page === "dialogue" && view.scene === pn.scene) startPractice();
+  });
+}
+
+// ---- 練習中の共通アクション（日本語・英語コマンドの両方から使う） ----
+function curTurn() { return practice ? currentScene().turns[practice.idx] : null; }
+function prevPartnerTurn() {
+  if (!practice) return null;
+  const turns = currentScene().turns;
+  for (let i = Math.min(practice.idx, turns.length - 1); i >= 0; i--) {
+    if (turns[i].s === "p") return turns[i];
+  }
+  return null;
+}
+function asAnswer() {   // 答えの英文を開示して読み上げる
+  const t = curTurn(); if (!t) return;
+  const el = $("en" + practice.idx); if (el) el.classList.remove("hidden-text");
+  speak(t.en);
+}
+function asHint() {     // 最初の3語だけ読む（思い出しの取っかかり）
+  const t = curTurn(); if (!t) return;
+  speak(t.en.split(/\s+/).slice(0, 3).join(" "));
+}
+function asJapanese() { // 直前の相手のセリフ（質問）を日本語で読む
+  const pp = prevPartnerTurn(); const t = curTurn();
+  const ja = pp ? pp.ja : (t ? t.ja : "");
+  if (ja) speakJa(ja);
+}
+function asRepeat() {   // 相手のセリフをもう一度
+  const pp = prevPartnerTurn();
+  if (pp) speak(pp.en);
+}
+function syncRateUI() {
+  const r = $("rngRate"); if (r) { r.value = settings.rate; $("rateVal").textContent = settings.rate; }
+}
+function asSlower() {
+  settings.rate = Math.max(0.6, +(settings.rate - 0.15).toFixed(2));
+  saveSettings(); syncRateUI();
+  speakJa("少しゆっくりにしました。", () => { if (practice) asRepeat(); });
+}
+function asFaster() {
+  settings.rate = Math.min(1.2, +(settings.rate + 0.15).toFixed(2));
+  saveSettings(); syncRateUI();
+  speakJa("少し速くしました。", () => { if (practice) asRepeat(); });
+}
+
+// ---- 日本語コマンド ----
+function handleJaCommand(heard) {
+  showAsHeard("🎙 " + heard);
+  const q = normJa(heard);
+  if (!q) return;
+
+  // 確認待ちへの返事
+  if (asPending && Date.now() - asPendingAt < 30000) {
+    if (/^(はい|うん|おっけ|オッケ|ok|おけ|おねがい|お願い|やる|進んで|すすんで|開始|スタート)/.test(q)) {
+      const pn = asPending; asPending = null; updateAsBar();
+      runPendingScene(pn);
+      return;
+    }
+    if (/^(いいえ|いえ|やめ|キャンセル|ちがう|違う|しない)/.test(q)) {
+      asPending = null; updateAsBar();
+      speakJa("取り消しました。");
+      return;
+    }
+    asPending = null; updateAsBar();   // 返事以外なら確認を破棄して通常コマンドへ
+  }
+
+  // 次のシーン（練習中でも使えるよう、練習コマンドより先に判定）
+  if (/次のシーン|つぎのシーン/.test(heard)) {
+    const c = DATA.find(x => x.id === view.cat);
+    const nx = view.scene ? nextSceneAfter(view.cat, view.scene) : (c ? c.scenes[0] : null);
+    if (practice) stopPractice(false);
+    if (nx) {
+      asPending = { cat: view.cat, scene: nx.id, name: nx.name };
+      asPendingAt = Date.now(); updateAsBar();
+      speakJa("次は、" + nx.name + "、です。進みますか？");
+    } else {
+      speakJa(c ? "このカテゴリのシーンはこれで最後です。" : "先にカテゴリを開いてください。");
+    }
+    return;
+  }
+
+  // 練習中（マイク判定オフのとき）の日本語コマンド
+  if (practice && handlePracticeJa(q)) return;
+
+  if (/^(もどる|戻る|もどって|戻って)$/.test(q)) {
+    backBtn.click();
+    return;
+  }
+  if (/^(開始|かいし|スタート|すたーと|はじめて|始めて|練習開始)$/.test(q)) {
+    if (view.page === "dialogue") speakJa("始めます。", () => startPractice());
+    else speakJa("先にシーンを選んでください。");
+    return;
+  }
+  if (/思い出すモード|日本語から/.test(q)) {
+    settings.mode = "hide"; saveSettings();
+    if (view.page === "dialogue") render();
+    speakJa("日本語から思い出すモードにしました。");
+    return;
+  }
+  if (/英文を見る|見て読むモード|表示モード/.test(q)) {
+    settings.mode = "show"; saveSettings();
+    if (view.page === "dialogue") render();
+    speakJa("英文を見て読むモードにしました。");
+    return;
+  }
+  if (/マイク判定.*(オン|おん|つけて|有効)/.test(q)) {
+    settings.mic = true; saveSettings();
+    const c = $("chkMic"); if (c) c.checked = true;
+    speakJa("マイク判定をオンにしました。");
+    return;
+  }
+  if (/マイク判定.*(オフ|おふ|切って|無効)/.test(q)) {
+    settings.mic = false; saveSettings();
+    const c = $("chkMic"); if (c) c.checked = false;
+    speakJa("マイク判定をオフにしました。");
+    return;
+  }
+  if (/^(ゆっくり|おそく|遅く)/.test(q)) { asSlower(); return; }
+  if (/^(はやく|早く|速く)/.test(q)) { asFaster(); return; }
+
+  // カテゴリ名
+  const cat = findCategory(heard);
+  if (cat) {
+    view = { page: "scenes", cat: cat.id, q: "" };
+    render();
+    speakJa(cat.name + "を開きました。シーン名をどうぞ。");
+    return;
+  }
+
+  // シーン名の検索 →「これでいいですか」の確認
+  const hit = findScene(heard);
+  if (hit) {
+    asPending = { cat: hit.cat, scene: hit.scene, name: hit.name };
+    asPendingAt = Date.now(); updateAsBar();
+    speakJa(hit.name + "、でよろしいですか？");
+    return;
+  }
+  // 「やりたい」等の意図があるのに見つからなかったときだけ返事する（雑音に反応しない）
+  if (/やりたい|したい|開いて|お願い/.test(heard)) {
+    speakJa("見つかりませんでした。別の言い方でどうぞ。");
+  }
+}
+
+function handlePracticeJa(q) {
+  if (/わからない|分からない|答え|こたえ|ギブアップ/.test(q)) { asAnswer(); return true; }
+  if (/ヒント|ひんと/.test(q)) { asHint(); return true; }
+  if (/日本語|にほんご|訳して|やくして|どういう意味/.test(q)) { asJapanese(); return true; }
+  if (/もう一度|もういちど|もっかい|繰り返/.test(q)) { asRepeat(); return true; }
+  if (/^(つぎ|次|次へ|スキップ|すきっぷ)$/.test(q)) { $("btnNext").click(); return true; }
+  if (/^(最初から|さいしょから|やり直し|やりなおし)$/.test(q)) { startPractice(); return true; }
+  if (/終了|しゅうりょう|やめる|やめて|ストップ|停止/.test(q)) {
+    stopPractice(false); speakJa("練習を終了しました。"); return true;
+  }
+  if (/ゆっくり/.test(q)) { asSlower(); return true; }
+  if (/速く|早く|はやく/.test(q)) { asFaster(); return true; }
+  return false;
+}
+
+// ---- 英語コマンド（マイク判定オンの自分のターン中。完全一致のみ） ----
+function handleEnCommand(saidRaw, t) {
+  const x = saidRaw.toLowerCase().replace(/[^a-z' ]/g, " ").replace(/\s+/g, " ").trim();
+  const next = () => $("btnNext").click();
+  const stop = () => { stopPractice(false); speakJa("練習を終了しました。"); };
+  const table = {
+    "i don't know": asAnswer, "i dont know": asAnswer, "help": asAnswer, "help me": asAnswer,
+    "i give up": asAnswer, "answer": asAnswer, "answer please": asAnswer,
+    "the answer": asAnswer, "play the answer": asAnswer,
+    "hint": asHint, "hint please": asHint, "give me a hint": asHint,
+    "in japanese": asJapanese, "japanese": asJapanese, "japanese please": asJapanese,
+    "translate": asJapanese, "translation": asJapanese,
+    "one more time": asRepeat, "repeat": asRepeat, "repeat please": asRepeat,
+    "again": asRepeat, "say that again": asRepeat,
+    "slower": asSlower, "slower please": asSlower, "speak slower": asSlower,
+    "faster": asFaster, "speak faster": asFaster,
+    "next": next, "next please": next, "skip": next,
+    "stop": stop, "stop practice": stop, "finish": stop,
+    "start over": () => startPractice(),
+  };
+  if (table[x]) { showAsHeard("🎙 " + saidRaw); table[x](); return true; }
+  const m = x.match(/^what does (.+) mean$/) || x.match(/^what's (.+)$/) ||
+            x.match(/^what is (.+)$/) || x.match(/^meaning of (.+)$/);
+  if (m) { showAsHeard("🎙 " + saidRaw); asDefine(m[1]); return true; }
+  return false;
+}
+
+function asDefine(term) {
+  const key = norm(term.trim());
+  let e = dictReady ? PHRASES[key] : null;
+  if (!e && dictReady) {
+    const lem = key.split(" ").map(phLemma).join(" ");
+    e = PHRASES[lem];
+  }
+  if (!e && dictReady && key.split(" ").length === 1) {
+    const f = lookupWord(key);
+    if (f) e = f.e;
+  }
+  if (e) speakJa(term + "。" + e[0]);
+  else speakJa("辞書に見つかりませんでした。画面の単語をタップすると意味が出ます。");
+}
+
+// ボタンで明示的にオンにする（マイクを勝手に開かないため、状態は保存しない）
+$("asBtn").onclick = () => {
+  unlockTTS();
+  if (!micAvailable()) { showAsHeard("⚠ このブラウザは音声認識に対応していません"); return; }
+  setAssistant(!assistantOn);
+  if (assistantOn) speakJa("音声操作をオンにしました。");
+};
 
 // ---- 画面描画 ----
 function render() {
   speechSynthesis.cancel();
   hideTip();
+  updateAsBar();
   if (view.page === "home") renderHome();
   else if (view.page === "scenes") renderScenes();
   else renderDialogue();
@@ -4017,6 +4420,18 @@ function stopPractice(finished) {
     done.innerHTML = "🎉 会話を最後まで練習しました！";
     main.prepend(done);
     setTimeout(() => done.remove(), 6000);
+
+    // 音声操作がオンなら、次のシーンへ進むか声で確認する
+    if (assistantOn) {
+      const nx = nextSceneAfter(view.cat, view.scene);
+      if (nx) {
+        asPending = { cat: view.cat, scene: nx.id, name: nx.name };
+        asPendingAt = Date.now(); updateAsBar();
+        speakJa("お疲れさまでした。次のシーン、" + nx.name + "、に進みますか？");
+      } else {
+        speakJa("お疲れさまでした。このカテゴリのシーンはこれで最後です。");
+      }
+    }
   }
 }
 
