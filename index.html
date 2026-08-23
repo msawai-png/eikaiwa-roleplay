@@ -185,6 +185,30 @@
   .vocab-top .name { font-weight: 700; font-size: 16px; }
   .vocab-top .desc { color: var(--sub); font-size: 13px; margin-top: 2px; }
 
+  /* ---- AI 連携 ---- */
+  .ai-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--sub); margin-bottom: 14px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 9px 14px;
+  }
+  .ai-row .dot { width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; }
+  .ai-row .dot.on { background: var(--ok); }
+  .ai-row button {
+    border: 1px solid var(--border); background: var(--card); color: var(--ink);
+    border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  }
+  .ai-row button:hover { background: var(--accent-soft); }
+  .ai-form { display: grid; gap: 8px; margin-top: 8px; width: 100%; }
+  .ai-form label { display: grid; gap: 3px; font-size: 12px; }
+  .ai-form input {
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    font-size: 14px; width: 100%; box-sizing: border-box;
+  }
+  .ai-form .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ai-note { font-size: 11.5px; color: var(--sub); line-height: 1.5; }
+  #aiState { font-size: 12.5px; min-height: 17px; margin: 2px 0 4px; color: #7c3aed; font-weight: 700; }
+
   .vbar {
     display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     background: var(--card); border: 1px solid var(--border);
@@ -325,6 +349,7 @@
   <div id="panelInner">
     <div id="panelStatus"></div>
     <div id="micState"></div>
+    <div id="aiState"></div>
     <div id="hintBox"></div>
     <div id="recognized"></div>
     <div id="panelBtns">
@@ -9641,6 +9666,186 @@ function stopListening() {
 }
 
 // ============================================================
+// AI 中継サーバーとの連携
+//
+// アプリは公開ページなので API キーを持てない。キーは Cloudflare Worker
+// （AI中継サーバー フォルダ）に置き、アプリはその URL と合言葉だけを
+// この端末に保存して呼び出す。未設定なら従来のルール方式のまま動く。
+// ============================================================
+let ai = store.get("ai", { url: "", token: "" });
+let aiBusy = false;
+
+function aiReady() { return !!(ai.url && ai.token); }
+
+function setAiState(text) {
+  const el = $("aiState");
+  if (el) el.textContent = text || "";
+}
+
+async function aiCall(mode, payload) {
+  if (!aiReady() || aiBusy) return null;
+  aiBusy = true;
+  setAiState("🤖 考えています…");
+  try {
+    const r = await fetch(ai.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Token": ai.token },
+      body: JSON.stringify({ mode, payload }),
+    });
+    let j = null;
+    try { j = await r.json(); } catch {}
+    if (!r.ok || !j || !j.ok) {
+      const msg = (j && j.error) || ("AIの呼び出しに失敗しました（" + r.status + "）");
+      setAiState("⚠ " + msg);
+      showAsHeard("⚠ " + msg);
+      return null;
+    }
+    setAiState("");
+    return j.result;
+  } catch (e) {
+    setAiState("⚠ AIに繋がりません（設定のURLを確認してください）");
+    return null;
+  } finally {
+    aiBusy = false;
+  }
+}
+
+// 発話をAIに解釈させて操作する。候補はアプリ側で名前の近さで絞って渡す
+// （全402シーンを毎回送ると無駄に大きくなるため）
+async function aiInterpret(utterance) {
+  const cands = [];
+  DATA.forEach(c => c.scenes.forEach(sc => {
+    cands.push({ id: sc.id, name: sc.name, category: c.name, score: jaSim(utterance, sc.name) });
+  }));
+  cands.sort((a, b) => b.score - a.score);
+  const top = cands.slice(0, 30).map(x => ({ id: x.id, name: x.name, category: x.category }));
+
+  const cat = DATA.find(c => c.id === view.cat);
+  const sc = view.scene ? currentScene() : null;
+  const res = await aiCall("interpret", {
+    utterance,
+    page: view.page,
+    category: cat ? cat.name : "",
+    scene: sc ? sc.name : "",
+    inPractice: !!practice,
+    categories: DATA.map(c => ({ id: c.id, name: c.name })),
+    candidates: top,
+  });
+  if (!res) return false;
+  return runAiAction(res);
+}
+
+// AI が返した操作を実行する
+function runAiAction(res) {
+  const say = (res.say || "").trim();
+  const t = (res.target || "").trim();
+  const findScene = (id) => {
+    for (const c of DATA) {
+      const hit = c.scenes.find(x => x.id === id);
+      if (hit) return { cat: c.id, scene: hit.id, name: hit.name };
+    }
+    return null;
+  };
+  switch (res.action) {
+    case "open_category": {
+      const c = DATA.find(x => x.id === t) || DATA.find(x => x.name === t);
+      if (!c) return false;
+      view = { page: "scenes", cat: c.id, q: "" };
+      render();
+      speakJa(say || (c.name + "を開きました。"));
+      return true;
+    }
+    case "open_scene": {
+      const hit = findScene(t);
+      if (!hit) return false;
+      asPending = { cat: hit.cat, scene: hit.scene, name: hit.name };
+      asPendingAt = Date.now();
+      updateAsBar();
+      speakJa(hit.name + "、でよろしいですか？");
+      return true;
+    }
+    case "start":
+      if (view.page === "dialogue") { speakJa(say || "始めます。", () => startPractice()); return true; }
+      return false;
+    case "next_scene": {
+      const nx = view.scene ? nextSceneAfter(view.cat, view.scene) : null;
+      if (!nx) return false;
+      if (practice) stopPractice(false);
+      asPending = { cat: view.cat, scene: nx.id, name: nx.name };
+      asPendingAt = Date.now(); updateAsBar();
+      speakJa("次は、" + nx.name + "、です。進みますか？");
+      return true;
+    }
+    case "answer":    if (practice) { asAnswer(); return true; } return false;
+    case "hint":      if (practice) { asHint(); return true; } return false;
+    case "prep":      if (practice) { asHintKind("prep"); return true; } return false;
+    case "words":     if (practice) { asHintKind("words"); return true; } return false;
+    case "translate": if (practice) { asJapanese(); return true; } return false;
+    case "repeat":    if (practice) { asRepeat(); return true; } return false;
+    case "slower":    asSlower(); return true;
+    case "faster":    asFaster(); return true;
+    case "next":      if (practice) { $("btnNext").click(); return true; } return false;
+    case "stop":      if (practice) { stopPractice(false); speakJa(say || "終了しました。"); return true; } return false;
+    case "vocab":     openVocab(); speakJa(say || "単語練習を開きます。"); return true;
+    case "mode_recall":
+      settings.mode = "hide"; saveSettings();
+      if (view.page === "dialogue") render();
+      speakJa(say || "思い出すモードにしました。");
+      return true;
+    case "mode_show":
+      settings.mode = "show"; saveSettings();
+      if (view.page === "dialogue") render();
+      speakJa(say || "英文を見るモードにしました。");
+      return true;
+    case "ask":
+      if (say) { showHint({ show: say }, null); speakJa(say); return true; }
+      return false;
+    default:
+      return false;
+  }
+}
+
+// 練習中の自由質問をAIに投げる
+async function aiAsk(question) {
+  const t = curTurn();
+  const pp = prevPartnerTurn();
+  const res = await aiCall("ask", {
+    question,
+    model_en: t ? t.en : "",
+    model_ja: t ? t.ja : "",
+    partner_en: pp ? pp.en : "",
+  });
+  if (!res || !res.answer) return false;
+  showHint({ show: res.answer }, null);
+  speakJa(res.answer);
+  return true;
+}
+
+// 発話の採点をAIに任せる（模範文と語が違っても通じていれば正解にする）
+async function aiGrade(said, t) {
+  const res = await aiCall("grade", { said, model_en: t.en, model_ja: t.ja });
+  if (!res) return false;
+  const badge = `<span id="scoreBadge" class="${res.ok ? "score-high" : "score-low"}">AI判定 ${Math.round(res.score)}%</span>`;
+  $("recognized").innerHTML = `あなた：「${esc(said)}」 ${badge}`;
+  if (res.comment) showHint({ show: res.comment }, null);
+  const el = $("en" + practice.idx);
+  if (el) el.classList.remove("hidden-text");
+  if (res.ok) {
+    stopListening();
+    setStatus("✅ " + (res.comment || "通じています！") );
+    setBtns({ replay: false, answer: true, reveal: false, retry: true, next: true });
+    speakJa(res.comment || "通じています。", () => {
+      if (practice) practice.autoTimer = setTimeout(() => { practice.idx++; playTurn(); }, 400);
+    });
+  } else {
+    setStatus("🔁 " + (res.comment || "もう一度どうぞ"));
+    setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true });
+    speakJa(res.comment || "もう一度どうぞ。");
+  }
+  return true;
+}
+
+// ============================================================
 // 音声アシスタント（音声でアプリを操作する）
 //
 // 制約：ブラウザの音声認識は一度に1つ・1言語しか動かせない。そこで
@@ -9755,7 +9960,7 @@ function updateAsBar() {
   const bar = $("asBar"), btn = $("asBtn");
   if (!bar || !btn) return;
   btn.classList.toggle("on", assistantOn);
-  btn.textContent = assistantOn ? "🎙 音声操作 ON" : "🎙 音声操作";
+  btn.textContent = assistantOn ? (aiReady() ? "🎙 音声操作 ON（AI）" : "🎙 音声操作 ON") : "🎙 音声操作";
   bar.classList.toggle("show", assistantOn);
   bar.classList.toggle("jahelp", jaHelp);
   if (!assistantOn) return;
@@ -10123,6 +10328,19 @@ function handleJaCommand(heard) {
     speakJa(hit.name + "、でよろしいですか？");
     return;
   }
+  // ここまでルールで拾えなかった発話は AI に回す（設定してあるときだけ）
+  if (aiReady() && normJa(heard).length >= 3) {
+    // 練習中の質問らしければ質問として、それ以外は操作として解釈させる
+    const looksLikeQuestion = /なぜ|なんで|どうして|どういう|違い|使い分け|丁寧|自然|ネイティブ|意味|\?|？/.test(heard);
+    if (practice && looksLikeQuestion) { aiAsk(heard); return; }
+    aiInterpret(heard).then(done => {
+      if (!done && /やりたい|したい|開いて|お願い/.test(heard)) {
+        speakJa("見つかりませんでした。別の言い方でどうぞ。");
+      }
+    });
+    return;
+  }
+
   // 「やりたい」等の意図があるのに見つからなかったときだけ返事する（雑音に反応しない）
   if (/やりたい|したい|開いて|お願い/.test(heard)) {
     speakJa("見つかりませんでした。別の言い方でどうぞ。");
@@ -10171,6 +10389,10 @@ function handlePracticeJa(q, raw) {
   if (/の意味/.test(q)) {
     const mm = (raw || "").match(/(.+?)\s*の意味/);
     if (mm) { bumpJaHelp(); asDefine(mm[1]); return true; }
+  }
+  // 文法や言い換えの質問は AI に回す（設定してあるときだけ）
+  if (aiReady() && /なぜ|なんで|どうして|どういう|違い|使い分け|丁寧|自然|ネイティブ|他の言い方|言い換え/.test(raw || "")) {
+    bumpJaHelp(); aiAsk(raw); return true;
   }
   if (/日本語|にほんご|訳して|やくして|どういう意味/.test(q)) { bumpJaHelp(); asJapanese(); return true; }
   if (/もう一度|もういちど|もっかい|繰り返/.test(q)) { bumpJaHelp(); asRepeat(); return true; }
@@ -10712,6 +10934,7 @@ function vocabReveal(grade, skipStop) {
 function render() {
   speechSynthesis.cancel();
   hideTip();
+  setAiState("");
   if (view.page !== "vocab") vocabStopVoice();   // 画面を離れたら答え待ちを解除
   updateAsBar();
   if (view.page === "home") renderHome();
@@ -10745,13 +10968,57 @@ function renderHome() {
           ${vst.due ? `・<b style="color:var(--ng)">今日の復習 ${vst.due}</b>` : ""}</div>
       </div>
     </div>`;
-  main.innerHTML = fileNote + vocabEntry + `<div class="grid">` + DATA.map(c => `
+  const aiRow = `
+    <div class="ai-row" id="aiRow">
+      <span class="dot ${aiReady() ? "on" : ""}"></span>
+      <span>AIアシスト：<b>${aiReady() ? "有効" : "未設定"}</b></span>
+      <span style="flex:1"></span>
+      <button id="aiCfgBtn">${aiReady() ? "設定を変える" : "設定する"}</button>
+      <div id="aiCfg" style="display:none;width:100%"></div>
+    </div>`;
+  main.innerHTML = fileNote + vocabEntry + aiRow + `<div class="grid">` + DATA.map(c => `
     <div class="tile" onclick="openCategory('${c.id}')">
       <div class="emoji">${c.emoji}</div>
       <div class="name">${c.name}</div>
       <div class="desc">${c.desc}</div>
       <div class="meta">${c.scenes.length} シーン ・ 練習 ${c.scenes.reduce((a,s)=>a+(counts[c.id+"/"+s.id]||0),0)} 回</div>
     </div>`).join("") + `</div>`;
+
+  $("aiCfgBtn").onclick = () => {
+    const box = $("aiCfg");
+    if (box.style.display !== "none") { box.style.display = "none"; return; }
+    box.style.display = "block";
+    box.innerHTML = `
+      <div class="ai-form">
+        <label>中継サーバーのURL
+          <input id="aiUrl" type="url" placeholder="https://eikaiwa-ai.（自分の名前）.workers.dev" value="${esc(ai.url)}">
+        </label>
+        <label>合言葉（APP_TOKEN）
+          <input id="aiTok" type="password" placeholder="サーバーに設定したものと同じ文字列" value="${esc(ai.token)}">
+        </label>
+        <div class="btns">
+          <button class="btn btn-primary" id="aiSave" style="padding:8px 16px;font-size:13px">保存して接続を試す</button>
+          <button class="btn btn-ghost" id="aiClear" style="padding:8px 16px;font-size:13px">設定を消す</button>
+        </div>
+        <div class="ai-note" id="aiMsg">
+          この2つはこの端末にだけ保存されます（公開ファイルには入りません）。
+          設定手順は AI中継サーバー フォルダの「はじめかた.md」にあります。
+        </div>
+      </div>`;
+    $("aiSave").onclick = async () => {
+      ai = { url: $("aiUrl").value.trim(), token: $("aiTok").value.trim() };
+      store.set("ai", ai);
+      $("aiMsg").textContent = "接続を試しています…";
+      const r = await aiCall("interpret", {
+        utterance: "接続の確認", page: "home", category: "", scene: "", inPractice: false,
+        categories: DATA.map(c => ({ id: c.id, name: c.name })), candidates: [],
+      });
+      $("aiMsg").textContent = r ? "✅ 繋がりました。音声操作でAIが使えます。"
+                                : "⚠ 繋がりませんでした。URLと合言葉、サーバーの公開状態を確認してください。";
+      if (r) render();
+    };
+    $("aiClear").onclick = () => { ai = { url: "", token: "" }; store.set("ai", ai); render(); };
+  };
 }
 
 function renderScenes() {
@@ -11010,6 +11277,17 @@ function showFeedback(said, t) {
   const el = $("en" + practice.idx);
   if (el) el.classList.remove("hidden-text");
 
+  // 語の一致だけでは「言えているのに不正解」になる場面があるため、
+  // 一致率が高くないときは AI に意味で判定させる（設定してあるときだけ）
+  if (aiReady() && score < 85) {
+    aiGrade(said, t).then(done => { if (!done) fallbackFeedback(score, t); });
+    return;
+  }
+  fallbackFeedback(score, t);
+}
+
+// AI を使わない場合の従来どおりの判定
+function fallbackFeedback(score, t) {
   if (score >= 70) {
     stopListening();   // 直後に相手が話すので、その声を拾わないよう止める
     setStatus("✅ よく言えています！自動で次に進みます…");
