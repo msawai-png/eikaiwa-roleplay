@@ -170,6 +170,54 @@
   #hintBox.show { display: block; }
   #hintBox .skel { font-size: 16px; letter-spacing: .5px; color: #1f2937; font-weight: 700; }
   #hintBox .lv { font-size: 11px; font-weight: 700; color: #b45309; }
+
+  /* ---- 単語・熟語の学習 ---- */
+  .vocab-top {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 14px; cursor: pointer;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .vocab-top:hover { box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+  .vocab-top .emoji { font-size: 28px; }
+  .vocab-top .name { font-weight: 700; font-size: 16px; }
+  .vocab-top .desc { color: var(--sub); font-size: 13px; margin-top: 2px; }
+
+  .vbar {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 14px; margin-bottom: 14px;
+    font-size: 13px; color: var(--sub);
+  }
+  .vbar select { font-size: 13px; padding: 4px; }
+  .vbar .stat { font-weight: 700; color: var(--ink); }
+  .vbar .stat.ok { color: var(--ok); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 26px 22px; text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,.05);
+  }
+  .card .kind {
+    display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px;
+    padding: 2px 10px; margin-bottom: 12px; background: var(--accent-soft); color: var(--accent);
+  }
+  .card .kind.ph { background: #ede9fe; color: #7c3aed; }
+  .card .mean { font-size: 21px; font-weight: 700; line-height: 1.5; }
+  .card .shape { color: var(--sub); font-size: 13px; margin-top: 10px; letter-spacing: 1px; }
+  .card .ans { font-size: 27px; font-weight: 700; margin: 6px 0 4px; color: var(--accent); }
+  .card .ex { color: #374151; font-size: 14px; margin-top: 10px; }
+  .card .ex .ja { color: var(--sub); font-size: 13px; }
+  .card .btns { display: flex; gap: 10px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+  .card .btns .btn { min-width: 130px; }
+  .btn-ok { background: var(--ok); color: #fff; }
+  .btn-ng { background: #fef2f2; color: var(--ng); border: 1px solid #fecaca; }
+  .vdone { text-align: center; padding: 30px 16px; }
+  .vdone .big { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+  @media (max-width: 720px) {
+    .card { padding: 20px 14px; }
+    .card .mean { font-size: 18px; }
+    .card .ans { font-size: 23px; }
+    .card .btns .btn { flex: 1 1 46%; min-width: 0; }
+  }
   #asHeard { font-weight: 700; transition: opacity .4s; }
   @media (max-width: 720px) {
     #asBtn { padding: 8px 12px; font-size: 12px; }
@@ -3713,6 +3761,7 @@ function speakCore(text, onend, lang) {
   ttsBusy = true;
   pauseListening();
   asPause();
+  vPause();
   if (resume) setMicState("tts");
 
   speechSynthesis.cancel();
@@ -3732,6 +3781,7 @@ function speakCore(text, onend, lang) {
     ttsBusy = false;
     if (onend) onend();
     if (resume && micWanted) setTimeout(startListening, 250);
+    else if (vocabWaitEn) setTimeout(vListen, 250);   // 単語練習の答え待ちに戻す
     else setTimeout(asMaybeListen, 250);   // 音声操作の聞き取りに戻す
     if (interrupted !== null && practice && practice.idx === interrupted) {
       setTimeout(playTurn, 300);      // 割り込みで切れた相手のセリフを読み直す
@@ -3918,6 +3968,7 @@ function asMaybeListen() {
   updateAsBar();
   if (!assistantOn || !micAvailable() || ttsBusy || asRecog) return;
   if (micWanted && !jaHelp) return;   // 英語判定中は動かさない（日本語ヘルプ中だけ例外）
+  if (vocabWaitEn) return;            // 単語練習の答え待ち中も動かさない
   if (Date.now() - asSince > IDLE_MIC_MS) {   // 長時間無音なら止める（開きっぱなし防止）
     setAssistant(false);
     showAsHeard("しばらく無音だったため音声操作を止めました");
@@ -3963,9 +4014,10 @@ function setAssistant(on) {
     asMaybeListen();
     // 読み上げの終了通知が届かない環境でも聞き取りが再開するよう、
     // 定期的に張り直しを試みる（asMaybeListen は条件を満たさなければ何もしない）
-    if (!asWatchdog) asWatchdog = setInterval(asMaybeListen, 1500);
+    if (!asWatchdog) asWatchdog = setInterval(() => { vListen(); asMaybeListen(); }, 1500);
   } else {
     asPause();
+    vocabStopVoice();
     asPending = null;
     if (jaHelp) { jaHelp = false; if (jaHelpTimer) clearTimeout(jaHelpTimer); jaHelpTimer = null; }
     if (asWatchdog) { clearInterval(asWatchdog); asWatchdog = null; }
@@ -3986,7 +4038,11 @@ function updateAsBar() {
   else if (asPending) hint = "「はい」で実行、「いいえ」で取り消し";
   else if (practice && micWanted) hint = "困ったら「ヘルプ」と言えば日本語で聞けます（英語では help / hint / in Japanese / next / stop）";
   else if (practice) hint = "「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「わからない」「日本語で」「もう一度」「次へ」「終了」";
-  else if (view.page === "home") hint = "カテゴリ名（「病院」など）か、やりたいシーン名を話しかけてください";
+  else if (view.page === "vocab") hint = vocabWaitEn
+    ? "🎤 英語で答えてください（分からなければ I don't know ／ repeat で再読 ／ stop で終了）"
+    : (vocab ? "「答え」「言えた」「言えなかった」「発音」「次」「終了」"
+             : "「はじめて」で20問出題します。「戻る」で前の画面へ");
+  else if (view.page === "home") hint = "カテゴリ名（「病院」など）／「単語練習」／やりたいシーン名";
   else if (view.page === "scenes") hint = "シーン名を言うと確認して開始します。「戻る」も使えます";
   else hint = "「開始」で練習を始めます。「戻る」「次のシーン」も使えます";
   $("asHint").textContent = hint;
@@ -4277,9 +4333,17 @@ function handleJaCommand(heard) {
     return;
   }
 
+  // 単語学習中のコマンド
+  if (view.page === "vocab" && handleVocabJa(q)) return;
+
   // 練習中（マイク判定オフのとき）の日本語コマンド
   if (practice && handlePracticeJa(q, heard)) return;
 
+  if (/単語練習|単語学習|単語の練習|たんごれんしゅう|熟語練習|フラッシュカード|単語帳/.test(q)) {
+    openVocab();
+    speakJa("単語練習を開きます。「はじめて」と言うと出題します。");
+    return;
+  }
   if (/^(もどる|戻る|もどって|戻って)$/.test(q)) {
     backBtn.click();
     return;
@@ -4337,6 +4401,32 @@ function handleJaCommand(heard) {
   if (/やりたい|したい|開いて|お願い/.test(heard)) {
     speakJa("見つかりませんでした。別の言い方でどうぞ。");
   }
+}
+
+function handleVocabJa(q) {
+  if (/最初から全部|一から|いちから|全部やり直/.test(q)) {
+    store.set("vmode", "fresh"); vocab = null; render();
+    speakJa("最初から順に全部出すモードにしました。「はじめて」でどうぞ。");
+    return true;
+  }
+  if (/おまかせ|復習優先|復習モード/.test(q)) {
+    store.set("vmode", "srs"); vocab = null; render();
+    speakJa("復習優先のおまかせモードにしました。");
+    return true;
+  }
+  if (/^(はじめて|始めて|開始|スタート|やる)/.test(q)) { const b = $("vStart"); if (b) b.click(); return true; }
+  if (!vocab) return false;
+  if (!vocab.shown && /答え|こたえ|わからない|分からない|見せて|ギブアップ/.test(q)) { vocabShowAnswer(); return true; }
+  if (vocab.shown) {
+    if (/言えた|いえた|正解|できた|おっけー|オッケー|まる/.test(q)) { gradeVocab(true); return true; }
+    if (/言えなかった|いえなかった|だめ|ダメ|間違|まちが|ばつ|わからない|分からない/.test(q)) { gradeVocab(false); return true; }
+    if (/発音|はつおん|読んで|もう一度|もういちど/.test(q)) {
+      const c = vocab.deck[vocab.i]; speak(c.k + ". " + c.ex); return true;
+    }
+  }
+  if (/^(つぎ|次|次へ|スキップ)/.test(q)) { if (vocab.shown) gradeVocab(false); else vocabShowAnswer(); return true; }
+  if (/終了|やめる|やめて|ストップ/.test(q)) { vocab = null; view = { page: "home" }; render(); speakJa("単語練習を終わりました。"); return true; }
+  return false;
 }
 
 function handlePracticeJa(q, raw) {
@@ -4425,13 +4515,462 @@ $("asBtn").onclick = () => {
   if (assistantOn) speakJa("音声操作をオンにしました。");
 };
 
+// ============================================================
+// 単語・熟語の学習
+//
+// 出題は「日本語 → 英語」。課題が「言いたいことが英語で出てこない」なので、
+// 英語を見て意味を答える向きでは練習にならない。
+// 間隔反復（Leitner 方式）で、正解した項目は次に出るまでの間隔を伸ばす。
+// ============================================================
+const VBOX_DAYS = [0, 1, 3, 7, 21];   // 箱1〜5の再出題間隔（日）
+const DAY_MS = 86400000;
+
+// ---- 品詞の自動分類 ----
+// 前置詞・接続詞などの閉じた品詞は語のリストで、動詞・名詞・形容詞・副詞は
+// 辞書の意味欄（日本語）の語尾から判定する。完全ではないが出題の絞り込み用途には足りる。
+const POS_CONJ = new Set(["and","or","but","because","so","if","although","though",
+  "while","whether","unless","since","once","than","when","whereas"]);
+const POS_FUNC = new Set(["i","you","he","she","it","we","they","me","him","her","us","them",
+  "my","your","his","its","our","their","mine","yours","this","that","these","those",
+  "who","what","which","where","why","how","whose","there","here",
+  "do","does","did","have","has","had","will","would","can","can't","could","should",
+  "may","might","must","shall","is","are","am","was","were","be","been","being",
+  "a","an","the","some","any","no","every","each","all","both","few","many","much",
+  "more","most","other","another","either","neither","none","something","anything",
+  "nothing","everything","someone","anyone","somewhere","anywhere","nobody",
+  "yes","not","please","hello","hi","hey","okay","ok","oh","thanks","thank","bye",
+  "certainly","sure","let","let's","shall","myself","yourself",
+  "i'm","i'd","i'll","i've","it's","that's","what's","where's","here's","there's",
+  "don't","doesn't","didn't","isn't","aren't","wasn't","won't","can't","couldn't",
+  "shouldn't","haven't","you're","you'd","you'll","you've","we're","we'll","they're",
+  "it'll","that'll","o'clock","mr","mrs","ms"]);
+const POS_NUM = new Set(["one","two","three","four","five","six","seven","eight","nine","ten",
+  "eleven","twelve","thirteen","fifteen","twenty","thirty","forty","fifty","sixty",
+  "seventy","eighty","ninety","hundred","thousand","million","first","second","third",
+  "fourth","fifth","twelfth","half","quarter"]);
+
+// 判定を間違えやすい語の決め打ち（実測で誤分類が出たもの）
+const POS_OVR = { too: "adv", then: "adv", now: "adv", soon: "adv", well: "adv",
+  often: "adv", always: "adv", sometimes: "adv", usually: "adv", maybe: "adv",
+  almost: "adv", together: "adv", again: "adv", away: "adv", back: "adv",
+  understood: "verb", right: "noun", left: "noun", today: "noun",
+  tomorrow: "noun", yesterday: "noun", tonight: "noun" };
+
+function posOf(k, mean) {
+  if (POS_OVR[k]) return POS_OVR[k];
+  if (POS_FUNC.has(k)) return "func";
+  if (POS_NUM.has(k) || /^(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)-/.test(k)) return "num";
+  if (PREPS.has(k)) return "prep";
+  if (POS_CONJ.has(k)) return "conj";
+  // 辞書の注釈（「〜の ing 形」「過去形」など）があれば最優先で使う
+  if (/ing 形|過去形|過去分詞|三人称単数/.test(mean)) return "verb";
+  if (/の複数形/.test(mean)) return "noun";
+  if (/比較級/.test(mean)) return "adj";
+  // 意味欄の最初の語義だけを取り出す（先頭の（注釈）や〜は外す）
+  let m = (mean || "").replace(/^（[^）]*）/, "");
+  m = m.split(/[／/，,（(]/)[0].trim().replace(/^[〜～…・「]/, "").replace(/[」。]$/, "");
+  if (!m) return "noun";
+  if (/する$/.test(m)) return "verb";
+  if (/[うくぐすつぬぶむる]$/.test(m)) return "verb";
+  if (/(い|しい)$/.test(m) && !/違い$|願い$|勢い$|支払い$|間違い$/.test(m)) return "adj";
+  if (/(な|の)$/.test(m)) return "adj";
+  if (/(に|く|と|り|て)$/.test(m)) return "adv";
+  return "noun";
+}
+const POS_LABEL = { verb: "動詞", noun: "名詞", adj: "形容詞", adv: "副詞",
+  prep: "前置詞", conj: "接続詞", func: "その他", num: "数" };
+
+let vocabIdxCache = null;
+
+// 各カテゴリに出てくる辞書の見出しを集める（単語と熟語の両方）
+function vocabIndex() {
+  if (vocabIdxCache) return vocabIdxCache;
+  const byCat = {};
+  const all = new Map();
+  const d = document.createElement("div");
+  DATA.forEach(c => {
+    const set = new Set();
+    c.scenes.forEach(sc => sc.turns.forEach(t => {
+      d.innerHTML = markup(t.en);
+      d.querySelectorAll(".w[data-k]").forEach(el => {
+        const k = el.dataset.k, ty = el.dataset.t;
+        set.add(k);
+        if (!all.has(k)) all.set(k, ty);
+      });
+    }));
+    byCat[c.id] = set;
+  });
+  const pos = new Map();
+  all.forEach((ty, k) => {
+    if (ty === "p") pos.set(k, "phrase");
+    else pos.set(k, posOf(k, WORDS[k] ? WORDS[k][0] : ""));
+  });
+  // 出現回数（会話文の中で何回使われているか）。よく出るものから出題するために使う
+  const freq = new Map();
+  DATA.forEach(c => c.scenes.forEach(sc => sc.turns.forEach(t => {
+    d.innerHTML = markup(t.en);
+    d.querySelectorAll(".w[data-k]").forEach(el => {
+      freq.set(el.dataset.k, (freq.get(el.dataset.k) || 0) + 1);
+    });
+  })));
+  vocabIdxCache = { byCat, all, pos, freq };
+  return vocabIdxCache;
+}
+
+function vocabEntry(k, ty) {
+  const e = ty === "p" ? (PHRASES[k] || null) : (WORDS[k] || null);
+  return e ? { k, ty, mean: e[0], ex: e[1], exja: e[2] } : null;
+}
+
+function vocabStore() { return store.get("vocab", {}); }
+function vocabSave(v) { store.set("vocab", v); }
+
+function vocabStats() {
+  if (!dictReady) return { total: 0, learned: 0, due: 0 };
+  const idx = vocabIndex();
+  const v = vocabStore();
+  const now = Date.now();
+  let learned = 0, due = 0;
+  Object.keys(v).forEach(k => {
+    if (v[k].b >= 5) learned++;
+    if (v[k].d <= now && v[k].b < 5) due++;
+  });
+  // 表示する総数は出題対象（機能語と数を除く）に揃える
+  const total = [...idx.pos.values()].filter(x => !["func", "num"].includes(x)).length;
+  return { total, learned, due };
+}
+
+// 出題する束を作る（期限が来たものを先に、足りなければ未学習から補う）
+function vocabDeck(scope, limit) {
+  const idx = vocabIndex();
+  let keys = [];
+  // 「すべて」でも the / a / I のような機能語と数は出さない（意味を答える学習にならないため）
+  if (scope === "all") keys = [...idx.all.keys()].filter(k => !["func", "num"].includes(idx.pos.get(k)));
+  else if (scope === "phrases") keys = [...idx.all.keys()].filter(k => idx.all.get(k) === "p");
+  else if (["verb", "noun", "adj", "adv", "prep", "conj"].includes(scope))
+    keys = [...idx.all.keys()].filter(k => idx.pos.get(k) === scope);
+  else if (scope === "weak") {
+    // 間違えた記録のあるもの全部（復習期限は無視して、よく出る順に）
+    const vv = vocabStore();
+    keys = Object.keys(vv).filter(k => (vv[k].ng || 0) >= 1 && (vv[k].b || 0) < 5 && idx.all.has(k));
+    keys.sort((a, b) => (idx.freq.get(b) || 0) - (idx.freq.get(a) || 0));
+    return keys.slice(0, limit).map(k => vocabEntry(k, idx.all.get(k))).filter(Boolean);
+  } else keys = [...(idx.byCat[scope] || [])];
+
+  const v = vocabStore();
+  const now = Date.now();
+  const byFreq = (a, b) => (idx.freq.get(b) || 0) - (idx.freq.get(a) || 0);
+  const mode = store.get("vmode", "srs");
+
+  if (mode === "fresh") {
+    // 最初から全部：学習記録に関係なく、よく出る順に頭から20問ずつ進む。
+    // どこまで進んだかは範囲ごとに覚えておき、端まで行ったら最初に戻る。
+    keys.sort(byFreq);
+    const posmap = store.get("vpos", {});
+    const start = posmap[scope] || 0;
+    const from = start >= keys.length ? 0 : start;
+    const pick = keys.slice(from, from + limit);
+    posmap[scope] = from + pick.length >= keys.length ? 0 : from + pick.length;
+    store.set("vpos", posmap);
+    return pick.map(k => vocabEntry(k, idx.all.get(k))).filter(Boolean);
+  }
+
+  // おまかせ（復習優先）：期限が来た復習を先に、残りは未学習をよく出る順に。
+  // 一度正解したものは、次の期限が来るまで出ない。
+  const dueList = [], newList = [];
+  keys.forEach(k => {
+    const st = v[k];
+    if (!st) newList.push(k);
+    else if (st.b < 5 && st.d <= now) dueList.push(k);
+  });
+  dueList.sort((a, b) => (v[a].d - v[b].d));
+  newList.sort(byFreq);
+  const pick = dueList.concat(newList).slice(0, limit);
+  return pick.map(k => vocabEntry(k, idx.all.get(k))).filter(Boolean);
+}
+
+// 毎回同じ順にならない程度の軽い並べ替え（乱数は使うが再現性は不要）
+function shuffleLite(a) {
+  const x = a.slice();
+  for (let i = x.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [x[i], x[j]] = [x[j], x[i]];
+  }
+  return x;
+}
+
+let vocab = null;   // { deck, i, shown, scope, ok, ng }
+
+window.openVocab = () => {
+  if (!dictReady) return;
+  stopPractice(false);
+  view = { page: "vocab", scope: store.get("vscope", "all") };
+  render();
+};
+
+function renderVocab() {
+  backBtn.style.display = "";
+  crumb.textContent = "📚 単語・熟語の練習";
+  panel.classList.remove("show");
+
+  const scope = view.scope || "all";
+  const idx = vocabIndex();
+  const nOf = (pos) => [...idx.pos.values()].filter(x => x === pos).length;
+  const opts = [
+    ["all", "すべて"],
+    ["weak", "間違えたものだけ"],
+    ["phrases", `熟語だけ（${[...idx.all.values()].filter(t => t === "p").length}）`],
+    ["verb", `動詞だけ（${nOf("verb")}）`],
+    ["noun", `名詞だけ（${nOf("noun")}）`],
+    ["adj", `形容詞だけ（${nOf("adj")}）`],
+    ["adv", `副詞だけ（${nOf("adv")}）`],
+    ["prep", `前置詞だけ（${nOf("prep")}）`],
+    ["conj", `接続詞だけ（${nOf("conj")}）`],
+  ].concat(DATA.map(c => [c.id, c.name + "に出る語"]));
+
+  const st = vocabStats();
+  main.innerHTML = `
+    <div class="vbar">
+      <label>出題範囲
+        <select id="vScope">${opts.map(([v2, n]) =>
+          `<option value="${v2}" ${scope === v2 ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      </label>
+      <label>出し方
+        <select id="vMode">
+          <option value="srs" ${store.get("vmode", "srs") === "srs" ? "selected" : ""}>おまかせ（復習優先・正解済みは省く）</option>
+          <option value="fresh" ${store.get("vmode", "srs") === "fresh" ? "selected" : ""}>最初から順に全部（よく出る順）</option>
+        </select>
+      </label>
+      <span>全 <span class="stat">${st.total}</span> 項目</span>
+      <span>習得 <span class="stat ok">${st.learned}</span></span>
+      <span>今日の復習 <span class="stat">${st.due}</span></span>
+      <button class="btn btn-primary" id="vStart">▶ 20問はじめる</button>
+      <button class="btn btn-ghost" id="vReset" style="font-size:12px">記録をリセット</button>
+    </div>
+    <div id="vArea"></div>`;
+
+  $("vScope").onchange = (e) => {
+    view.scope = e.target.value;
+    store.set("vscope", view.scope);
+    vocab = null;
+    render();
+  };
+  $("vMode").onchange = (e) => { store.set("vmode", e.target.value); vocab = null; render(); };
+  $("vReset").onclick = () => {
+    if (confirm("単語学習の記録（正解・間違い・進み具合）を全部消して、最初からやり直します。よろしいですか？")) {
+      store.set("vocab", {}); store.set("vpos", {});
+      vocab = null; render();
+    }
+  };
+  $("vStart").onclick = () => startVocab(view.scope);
+  if (vocab && vocab.scope === scope) drawCard(); else $("vArea").innerHTML = vocabIntro();
+}
+
+function vocabIntro() {
+  return `<div class="note">日本語の意味が出るので、<b>英語で声に出して言ってから</b>「答えを見る」を押してください。
+    言えたかどうかを自己申告すると、間違えたものが短い間隔で、覚えたものが長い間隔で出るようになります。
+    音声操作をオンにすれば「言えた」「言えなかった」「答え」も声で操作できます。</div>`;
+}
+
+function startVocab(scope) {
+  unlockTTS();
+  const deck = vocabDeck(scope, 20);
+  if (!deck.length) {
+    $("vArea").innerHTML = `<div class="vdone"><div class="big">この範囲は今日の復習がありません</div>
+      <div style="color:var(--sub)">別の範囲を選ぶか、明日また来てください。</div></div>`;
+    return;
+  }
+  vocab = { deck, i: 0, shown: false, scope, ok: 0, ng: 0 };
+  drawCard();
+}
+
+// 産出のとっかかり用に、語形だけ見せる（頭文字と長さ）
+function vShape(k) {
+  return k.split(" ").map(w => w[0] + "_".repeat(Math.max(0, w.length - 1))).join(" ");
+}
+
+function drawCard() {
+  const area = $("vArea");
+  if (!area || !vocab) return;
+  if (vocab.i >= vocab.deck.length) {
+    area.innerHTML = `<div class="vdone">
+      <div class="big">🎉 20問おわりました</div>
+      <div>言えた ${vocab.ok} ／ 言えなかった ${vocab.ng}</div>
+      <div class="btns" style="justify-content:center;margin-top:16px">
+        <button class="btn btn-primary" id="vAgain">もう20問</button>
+      </div></div>`;
+    $("vAgain").onclick = () => startVocab(vocab.scope);
+    const st = vocabStats();
+    if (assistantOn) speakJa(`おつかれさまでした。言えたのは${vocab.ok}問です。`);
+    vocab = null;
+    return;
+  }
+  const c = vocab.deck[vocab.i];
+  const posL = c.ty === "p" ? "熟語" : (POS_LABEL[vocabIndex().pos.get(c.k)] || "単語");
+  const head = `<span class="kind ${c.ty === "p" ? "ph" : ""}">${posL} ${vocab.i + 1} / ${vocab.deck.length}</span>`;
+  if (!vocab.shown) {
+    area.innerHTML = `<div class="card">${head}
+      <div class="mean">${esc(c.mean)}</div>
+      <div class="shape">${esc(vShape(c.k))}</div>
+      <div class="btns"><button class="btn btn-primary" id="vShow">答えを見る</button></div>
+    </div>`;
+    $("vShow").onclick = () => { vocabStopVoice(); vocab.shown = true; drawCard(); };
+    // 音声操作がオンなら、意味を読み上げて英語の答えを待つ
+    if (assistantOn && micAvailable()) {
+      vocab.tries = 0;
+      vocabWaitEn = true;
+      speakJa(c.mean);   // 読み上げ後、自動で英語の聞き取りが始まる
+    }
+  } else {
+    area.innerHTML = `<div class="card">${head}
+      <div class="ans">${esc(c.k)}</div>
+      <div class="mean" style="font-size:16px">${esc(c.mean)}</div>
+      <div class="ex">${esc(c.ex)}<div class="ja">${esc(c.exja)}</div></div>
+      <div class="btns">
+        <button class="btn btn-ok" id="vOk">言えた</button>
+        <button class="btn btn-ng" id="vNg">言えなかった</button>
+        <button class="btn btn-ghost" id="vSay">🔊 発音</button>
+      </div>
+    </div>`;
+    $("vOk").onclick = () => gradeVocab(true);
+    $("vNg").onclick = () => gradeVocab(false);
+    $("vSay").onclick = () => speak(c.k + ". " + c.ex);
+    if (vocab.autoNext) {
+      // 音声モード：答えと例文を読み上げてから、自動で記録して次の問題へ
+      const grade = vocab.autoNext; vocab.autoNext = null;
+      speak(c.k + ". " + c.ex, () => setTimeout(() => gradeVocab(grade === "ok"), 500));
+    } else {
+      speak(c.k);
+    }
+  }
+}
+
+function gradeVocab(ok) {
+  if (!vocab) return;
+  const c = vocab.deck[vocab.i];
+  const v = vocabStore();
+  const st = v[c.k] || { b: 0, d: 0, ng: 0 };
+  if (ok) {
+    // 初めての正解は翌日から（同じ回にすぐ出てこないように）。以降は間隔を伸ばす
+    st.b = Math.min(5, (st.b || 0) === 0 ? 2 : st.b + 1);
+    vocab.ok++;
+  } else {
+    st.b = 1;   // 間違いはすぐ再出題の箱へ
+    st.ng = (st.ng || 0) + 1;
+    vocab.ng++;
+  }
+  st.d = Date.now() + VBOX_DAYS[Math.min(VBOX_DAYS.length - 1, st.b - 1)] * DAY_MS;
+  v[c.k] = st;
+  vocabSave(v);
+  vocab.i++; vocab.shown = false;
+  drawCard();
+}
+
+function vocabShowAnswer() { if (vocab && !vocab.shown) { vocab.shown = true; drawCard(); } }
+
+// ---- 音声で答えるモード ----
+// 日本語の意味を読み上げ → 英語の答えを聞き取り → 合っていれば「正解」、
+// 違えば1回だけ再挑戦 → 答えを読み上げて不正解として次へ。手を使わず連続で回せる。
+let vocabWaitEn = false;   // いま英語の答えを待っているか
+let vRecog = null;
+
+function vPause() {
+  if (vRecog) { const old = vRecog; vRecog = null; try { old.abort(); } catch {} }
+}
+function vocabStopVoice() { vocabWaitEn = false; vPause(); }
+
+function vListen() {
+  if (!vocabWaitEn || !assistantOn || ttsBusy || micWanted || !micAvailable() || vRecog) return;
+  asPause();
+  const r = new SR();
+  r.lang = "en-US";
+  r.continuous = true;
+  r.interimResults = false;
+  r.maxAlternatives = 1;
+  r.onresult = (e) => {
+    if (vRecog !== r) return;
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        const said = (e.results[i][0].transcript || "").trim();
+        if (said) { handleVocabAnswer(said); return; }
+      }
+    }
+  };
+  r.onerror = (e) => {
+    if (vRecog !== r) return;
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+      vocabStopVoice();
+      showAsHeard("⚠ マイクが使えないため、ボタンで操作してください");
+    }
+  };
+  r.onend = () => {
+    if (vRecog !== r) return;
+    vRecog = null;
+    if (vocabWaitEn) setTimeout(vListen, 250);
+  };
+  vRecog = r;
+  try { r.start(); } catch { vRecog = null; }
+  updateAsBar();
+}
+
+const V_GIVEUP = new Set(["i don't know", "i dont know", "pass", "skip", "answer",
+  "the answer", "give up", "i give up", "help", "no idea", "show me"]);
+const V_STOP = new Set(["stop", "finish", "quit", "stop practice"]);
+
+function handleVocabAnswer(saidRaw) {
+  if (!vocab) { vocabStopVoice(); return; }
+  showAsHeard("🎙 " + saidRaw);
+  const x = saidRaw.toLowerCase().replace(/[^a-z' ]/g, " ").replace(/\s+/g, " ").trim();
+  const c = vocab.deck[vocab.i];
+
+  if (V_STOP.has(x)) {
+    vocabStopVoice();
+    vocab = null;
+    view = { page: "home" };
+    render();
+    speakJa("単語練習を終わりました。");
+    return;
+  }
+  if (x === "repeat" || x === "again" || x === "one more time") {
+    speakJa(c.mean);   // 問題文をもう一度（読み上げ後に自動で聞き取りへ戻る）
+    return;
+  }
+  if (V_GIVEUP.has(x)) { vocabReveal("ng"); return; }
+
+  // 答え合わせ：答えの語が全部含まれていれば正解（言い直し・余分な語は許す）
+  const saidW = new Set(tokenize(x));
+  const keyW = tokenize(c.k);
+  const okAll = keyW.length > 0 && keyW.every(w => saidW.has(w));
+  if (okAll) {
+    vocabStopVoice();
+    speakJa("正解！", () => vocabReveal("ok", true));
+    return;
+  }
+  // 1回だけ再挑戦
+  vocab.tries = (vocab.tries || 0) + 1;
+  if (vocab.tries >= 2) { vocabReveal("ng"); return; }
+  speakJa("もう一度どうぞ。");   // 読み上げが終わると自動で聞き取りに戻る
+}
+
+// 答え面を開き、読み上げてから自動で成否を記録して次へ
+function vocabReveal(grade, skipStop) {
+  if (!skipStop) vocabStopVoice();
+  if (!vocab) return;
+  vocabWaitEn = false;
+  vocab.autoNext = grade;
+  vocab.shown = true;
+  drawCard();
+}
+
 // ---- 画面描画 ----
 function render() {
   speechSynthesis.cancel();
   hideTip();
+  if (view.page !== "vocab") vocabStopVoice();   // 画面を離れたら答え待ちを解除
   updateAsBar();
   if (view.page === "home") renderHome();
   else if (view.page === "scenes") renderScenes();
+  else if (view.page === "vocab") renderVocab();
   else renderDialogue();
 }
 
@@ -4449,7 +4988,18 @@ function renderHome() {
       <b>http://localhost:8765</b> で表示され、最初に一度
       「サイトへのアクセス時は許可」を選ぶだけで以降は聞かれなくなります。
     </div>` : "";
-  main.innerHTML = fileNote + `<div class="grid">` + DATA.map(c => `
+  const vst = vocabStats();
+  const vocabEntry = `
+    <div class="vocab-top" onclick="openVocab()">
+      <span class="emoji">📚</span>
+      <div>
+        <div class="name">単語・熟語の練習</div>
+        <div class="desc">日本語を見て英語を言う練習。全 ${vst.total} 項目
+          ${vst.learned ? `・習得 ${vst.learned}` : ""}
+          ${vst.due ? `・<b style="color:var(--ng)">今日の復習 ${vst.due}</b>` : ""}</div>
+      </div>
+    </div>`;
+  main.innerHTML = fileNote + vocabEntry + `<div class="grid">` + DATA.map(c => `
     <div class="tile" onclick="openCategory('${c.id}')">
       <div class="emoji">${c.emoji}</div>
       <div class="name">${c.name}</div>
