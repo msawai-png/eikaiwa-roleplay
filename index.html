@@ -1,0 +1,1632 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>英会話ロールプレイ練習</title>
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --ink: #1f2937;
+    --sub: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --partner: #f1f5f9;
+    --me: #eff6ff;
+    --ok: #16a34a;
+    --ng: #dc2626;
+    --border: #e5e7eb;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* キーボード操作でも今どこにいるか分かるように */
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* 動きを減らす設定にしている人には点滅・変化を出さない */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+  body {
+    font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", sans-serif;
+    background: var(--bg); color: var(--ink);
+    line-height: 1.6;
+  }
+  header {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 12px 20px; display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 17px; font-weight: 700; }
+  #backBtn {
+    border: 1px solid var(--border); background: var(--card); color: var(--ink);
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 14px;
+  }
+  #backBtn:hover { background: var(--accent-soft); }
+  #crumb { color: var(--sub); font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+
+  /* ---- カテゴリ・シーン一覧 ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .tile {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px; cursor: pointer; transition: box-shadow .15s, transform .15s;
+  }
+  .tile:hover { box-shadow: 0 4px 14px rgba(0,0,0,.08); transform: translateY(-2px); }
+  .tile .emoji { font-size: 30px; }
+  .tile .name { font-weight: 700; font-size: 16px; margin-top: 8px; }
+  .tile .desc { color: var(--sub); font-size: 13px; margin-top: 4px; }
+  .tile .meta { color: var(--accent); font-size: 12px; margin-top: 8px; }
+
+  /* ---- 会話画面 ---- */
+  .toolbar {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 16px; margin-bottom: 16px;
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  }
+  .toolbar label { font-size: 13px; color: var(--sub); display: flex; align-items: center; gap: 6px; }
+  .toolbar select, .toolbar input[type=range] { font-size: 13px; }
+  .btn {
+    border: none; border-radius: 8px; padding: 9px 20px; font-size: 14px;
+    cursor: pointer; font-weight: 600;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-ghost { background: var(--card); border: 1px solid var(--border); color: var(--ink); }
+  .btn-ghost:hover { background: var(--accent-soft); }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  .colhead {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    font-size: 12px; color: var(--sub); font-weight: 700;
+    padding: 0 6px 6px;
+  }
+  .turn {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin-bottom: 10px; border-radius: 12px; padding: 6px;
+    border: 2px solid transparent;
+  }
+  .turn.active { border-color: var(--accent); background: #fff; box-shadow: 0 2px 10px rgba(37,99,235,.15); }
+  .cell {
+    border-radius: 10px; padding: 10px 14px; font-size: 15px;
+    background: var(--card); border: 1px solid var(--border);
+  }
+  .turn.partner .cell.en { background: var(--partner); }
+  .turn.me .cell.en { background: var(--me); }
+  .cell .speaker { font-size: 11px; font-weight: 700; color: var(--sub); display: block; margin-bottom: 2px; }
+  .turn.me .cell .speaker { color: var(--accent); }
+  .cell.ja { color: #374151; font-size: 14px; }
+  .cell.en { cursor: pointer; }
+  .cell.en:hover { outline: 2px solid var(--accent-soft); }
+  .en-text.hidden-text {
+    filter: blur(6px); user-select: none; transition: filter .2s;
+  }
+  .turn .revealTag { font-size: 11px; color: var(--accent); margin-left: 6px; }
+
+  /* 練習パネル */
+  #panel {
+    position: sticky; bottom: 0; background: var(--card);
+    border-top: 2px solid var(--accent); padding: 14px 20px;
+    display: none; z-index: 10; box-shadow: 0 -4px 16px rgba(0,0,0,.08);
+  }
+  #panel.show { display: block; }
+  #panelInner { max-width: 1100px; margin: 0 auto; }
+  #panelStatus { font-weight: 700; font-size: 15px; margin-bottom: 6px; }
+  #panelStatus .mic-on { color: var(--ng); }
+  #micState { font-size: 12.5px; min-height: 18px; margin: 2px 0 4px; }
+  #micState .mic-live { color: var(--ng); font-weight: 700; animation: micblink 1.4s infinite; }
+  #micState .mic-idle { color: var(--sub); }
+  @keyframes micblink { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  #recognized { font-size: 15px; min-height: 24px; margin-bottom: 8px; }
+  #recognized .w-ok { color: var(--ok); font-weight: 600; }
+  #recognized .w-ng { color: var(--ng); }
+  #scoreBadge {
+    display: inline-block; border-radius: 999px; padding: 2px 12px;
+    font-size: 13px; font-weight: 700; margin-left: 8px;
+  }
+  .score-high { background: #dcfce7; color: var(--ok); }
+  .score-low { background: #fee2e2; color: var(--ng); }
+  #panelBtns { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  .note {
+    background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px;
+    padding: 10px 14px; font-size: 13px; color: #92400e; margin-bottom: 16px;
+  }
+  .done-badge { color: var(--ok); font-weight: 700; }
+
+  /* ---- 単語ホバー辞書 ---- */
+  .w { border-radius: 3px; padding: 0 1px; }
+  .w.has { border-bottom: 1px dotted #9ca3af; cursor: help; }
+  .w.has:hover { background: #fef3c7; border-bottom-color: #d97706; }
+  .w.ph { border-bottom: 2px solid #c4b5fd; background: #f5f3ff; cursor: help; }
+  .w.ph:hover { background: #e9d5ff; border-bottom-color: #7c3aed; }
+  .hidden-text .w { border-bottom-color: transparent; background: none; cursor: default; }
+
+  #tip {
+    position: fixed; z-index: 100; display: none;
+    max-width: 340px; background: #1f2937; color: #f9fafb;
+    border-radius: 10px; padding: 10px 13px; font-size: 13px; line-height: 1.55;
+    box-shadow: 0 8px 24px rgba(0,0,0,.28);
+  }
+  #tip.show { display: block; }
+  .tip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .tip-term { font-weight: 700; font-size: 15px; color: #fff; }
+  .tip-tag {
+    font-size: 10px; border-radius: 999px; padding: 1px 7px;
+    background: #7c3aed; color: #fff; font-weight: 700;
+  }
+  .tip-tag.word { background: #2563eb; }
+  .tip-say {
+    margin-left: auto; background: #374151; border: none; color: #f9fafb;
+    border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 12px;
+  }
+  .tip-say:hover { background: #4b5563; }
+  .tip-mean { color: #fde68a; margin-bottom: 6px; }
+  .tip-ex { border-top: 1px solid #374151; padding-top: 6px; font-size: 12.5px; }
+  .tip-ex .en { color: #d1fae5; }
+  .tip-ex .ja { color: #9ca3af; }
+  .tip-chips { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
+  .tip-chip {
+    background: #374151; border: none; color: #e5e7eb; border-radius: 999px;
+    padding: 2px 9px; font-size: 11.5px; cursor: pointer;
+  }
+  .tip-chip:hover { background: #4b5563; color: #fff; }
+  .tip-none { color: #9ca3af; }
+
+  /* 画面が狭いときは、吹き出しを単語の近くではなく画面上部に固定して出す
+     （指で触ると単語が指の下に隠れるため） */
+  #tip.sheet {
+    left: 8px; right: 8px; top: 8px; bottom: auto;
+    max-width: none; font-size: 14px; padding: 13px 15px;
+  }
+
+  /* ---- スマホ・タブレット ---- */
+  @media (max-width: 720px) {
+    header { padding: 9px 12px; gap: 8px; }
+    header h1 { font-size: 15px; }
+    #crumb { font-size: 11.5px; }
+    #backBtn { padding: 8px 12px; }
+    main { padding: 12px; }
+
+    .grid { grid-template-columns: 1fr; gap: 10px; }
+    .tile { padding: 14px; }
+
+    /* 英語と日本語を横並びから縦積みに変える */
+    .turn { grid-template-columns: 1fr; gap: 3px; padding: 4px; }
+    .cell { padding: 9px 12px; }
+    .cell.ja {
+      background: transparent; border: none;
+      padding: 2px 12px 6px; font-size: 13px;
+    }
+    .cell.ja .speaker { display: none; }
+    .colhead { grid-template-columns: 1fr; font-size: 11px; }
+    .colhead div:last-child { display: none; }
+
+    .toolbar { padding: 10px 12px; gap: 9px; }
+    .toolbar label { width: 100%; }
+    .toolbar select { flex: 1; padding: 6px; }
+    .toolbar input[type=range] { flex: 1; }
+    #btnStart { width: 100%; padding: 12px; font-size: 15px; }
+
+    #panel { padding: 10px 12px; }
+    #panelStatus { font-size: 13.5px; }
+    #panelBtns { gap: 6px; }
+    #panelBtns .btn { flex: 1 1 46%; padding: 11px 8px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <button id="backBtn" style="display:none">← 戻る</button>
+  <h1>英会話ロールプレイ練習</h1>
+  <span id="crumb"></span>
+</header>
+
+<main id="main"></main>
+
+<div id="panel">
+  <div id="panelInner">
+    <div id="panelStatus"></div>
+    <div id="micState"></div>
+    <div id="recognized"></div>
+    <div id="panelBtns">
+      <button class="btn btn-ghost" id="btnReplay">🔊 もう一度聞く</button>
+      <button class="btn btn-ghost" id="btnAnswerVoice">🗣 答えの音声を聞く</button>
+      <button class="btn btn-ghost" id="btnReveal">👀 答えの英文を見る</button>
+      <button class="btn btn-ghost" id="btnRetry">🎤 もう一度話す</button>
+      <button class="btn btn-primary" id="btnNext">言えた → 次へ ▶</button>
+      <button class="btn btn-ghost" id="btnStop">■ 終了</button>
+    </div>
+  </div>
+</div>
+
+<div id="tip"></div>
+
+<script>
+/* --- dictionary.js を埋め込み（正本は dictionary.js） --- */
+// ============================================================
+// 単語・熟語辞書（index.html と同じフォルダに置いてください）
+//
+// 形式： "見出し語": ["意味", "例文(英語)", "例文の訳"]
+// 単語を追加したいときは WORDS に、熟語は PHRASES に同じ形式で足すだけ。
+// PHRASES は単語より優先して照合され、長い熟語から先に一致します。
+// ============================================================
+
+const PHRASES = {
+  // --- 買い物 ---
+  "hi there": ["やあ／いらっしゃいませ（くだけた挨拶）", "Hi there! How can I help you?", "いらっしゃいませ。何かお探しですか？"],
+  "look for": ["〜を探す（探している最中）", "I'm looking for a jacket.", "ジャケットを探しています。"],
+  "in particular": ["特に／具体的に", "Are you looking for anything in particular?", "何か特にお探しのものはありますか？"],
+  "depend on": ["〜によって決まる／〜次第だ", "It depends on the brand.", "ブランドによって変わります。"],
+  "come in": ["入荷する／入ってくる", "These just came in.", "これは入荷したばかりです。"],
+  "would you like to": ["〜なさいますか（丁寧な誘い・勧め）", "Would you like to try it on?", "ご試着なさいますか？"],
+  "would you like": ["〜はいかがですか（丁寧に希望を聞く）", "Would you like a bag?", "袋はご利用になりますか？"],
+  "i'd like to": ["〜したいのですが（丁寧に希望を言う）", "I'd like to return this.", "これを返品したいのですが。"],
+  "try on": ["試着する（try it on の語順に注意）", "Can I try this on?", "これを試着できますか？"],
+  "try one on": ["（そのうちの）1つを試着する", "Would you like to try one on?", "1着ご試着なさいますか？"],
+  "fitting room": ["試着室", "Where is the fitting room?", "試着室はどこですか？"],
+  "right over there": ["すぐあちらです（場所を指して）", "It's right over there.", "すぐあちらにございます。"],
+  "next to": ["〜の隣に", "It's next to the mirrors.", "鏡の隣です。"],
+  "how does it fit": ["サイズはいかがですか（着心地を聞く）", "How does it fit?", "サイズ感はいかがですか？"],
+  "a little": ["少し（形容詞の前に置いて和らげる）", "It's a little tight.", "少しきついです。"],
+  "let me check": ["確認させてください（すぐ調べます）", "Let me check our stock.", "在庫を確認しますね。"],
+  "here it is": ["これです（差し出すとき）", "Yes, here it is.", "はい、これです。"],
+  "i'll take it":["これをください（購入を決めるときの定番）", "This one fits perfectly. I'll take it.", "これはぴったりです。これをください。"],
+  "great choice": ["よいお選びです（店員の褒め言葉）", "Great choice!", "すてきなお買い物ですね。"],
+  "cash or card": ["現金かカードか", "Will that be cash or card?", "お支払いは現金かカードどちらですか？"],
+  "may i ask": ["お伺いしてもよいですか（丁寧に質問する）", "May I ask the reason?", "理由をお伺いしてもよろしいですか？"],
+  "the reason for": ["〜の理由", "May I ask the reason for the return?", "返品の理由をお伺いできますか？"],
+  "i see": ["なるほど／そうですか（相づち）", "I see. Do you have the receipt?", "なるほど。レシートはお持ちですか？"],
+  "with you": ["（手元に）持っている", "Do you have the receipt with you?", "レシートはお手元にありますか？"],
+  "would you prefer": ["どちらがご希望ですか（丁寧に選ばせる）", "Would you prefer to exchange it?", "交換をご希望ですか？"],
+  "of course": ["もちろんです", "Of course. I'll do that now.", "もちろんです。すぐにやります。"],
+  "right away": ["すぐに", "I'll process that right away.", "すぐに手続きします。"],
+  "thank you for your help": ["助けていただきありがとう", "Thank you for your help.", "ご対応ありがとうございました。"],
+
+  // --- 友達との会話 ---
+  "plans for": ["〜の予定", "Do you have any plans for the weekend?", "週末の予定はある？"],
+  "not really": ["特にない／そうでもない（やわらかい否定）", "Not really. I'm free.", "特にないよ。空いてる。"],
+  "was going to": ["〜するつもりだった", "I was going to relax at home.", "家でゆっくりするつもりだった。"],
+  "how about you": ["あなたはどう？（質問を返す）", "I'm fine. How about you?", "元気だよ。そっちは？"],
+  "how about": ["〜はどう？（提案する）", "How about Wednesday afternoon?", "水曜の午後はどうですか？"],
+  "a few of us": ["私たちのうち何人か", "A few of us are going hiking.", "何人かでハイキングに行くんだ。"],
+  "want to join": ["一緒に来る？（気軽な誘い）", "Want to join?", "一緒に行かない？"],
+  "sounds fun": ["楽しそう（相手の話への反応）", "That sounds fun!", "それ楽しそう！"],
+  "sounds good": ["いいね／了解（同意の定番）", "Sounds good. See you then.", "了解。ではその時に。"],
+  "not too": ["そんなに〜ではない", "It's not too hard.", "そんなにきつくないよ。"],
+  "what time": ["何時に", "What time are you leaving?", "何時に出発するの？"],
+  "in the morning": ["午前中に／朝に", "We're meeting at eight in the morning.", "朝8時に集合です。"],
+  "make it": ["都合をつけて行く／間に合う", "I'll try to make it.", "行けるようにするよ。"],
+  "should we": ["〜しようか？（一緒にどうかと持ちかける）", "Should we grab lunch?", "お昼を買っていこうか？"],
+  "grab lunch": ["昼食を軽く食べる／買う", "Should we grab lunch on the way?", "途中でお昼を買っていこうか？"],
+  "on the way": ["途中で", "There's a store on the way.", "途中に店があります。"],
+  "good idea": ["いい考えだね", "Good idea. Let's do that.", "いいね。そうしよう。"],
+  "see you": ["またね（別れの挨拶）", "See you on Saturday!", "土曜にね！"],
+  "look forward to": ["〜を楽しみにする（to の後ろは名詞か ing）", "I'm looking forward to it.", "楽しみにしています。"],
+  "it's been a while": ["久しぶりだね", "It's been a while! How are you?", "久しぶり！元気？"],
+  "how have you been": ["元気にしてた？（久しぶりの相手に）", "How have you been?", "どうしてた？"],
+  "busy with": ["〜で忙しい", "I've been busy with work.", "仕事で忙しかったよ。"],
+  "change jobs": ["転職する（jobs は複数形にする）", "I changed jobs last month.", "先月転職しました。"],
+  "so far": ["今のところ", "I like it so far.", "今のところ気に入っています。"],
+  "a lot to learn": ["覚えることが多い", "There's a lot to learn.", "覚えることが多いです。"],
+  "i know the feeling": ["その気持ち分かるよ（共感）", "I know the feeling.", "その気持ち、分かるよ。"],
+  "by the way": ["ところで（話題を変える）", "By the way, are you still going to the gym?", "ところで、まだジムに通ってる？"],
+  "as often as": ["〜と同じくらいの頻度で", "Not as often as before.", "前ほど頻繁ではないよ。"],
+  "twice a week": ["週2回", "I go twice a week.", "週2回行っています。"],
+  "catch up": ["近況を話す／遅れを取り戻す", "We should catch up soon.", "近いうちに話そうよ。"],
+  "over dinner": ["夕食を食べながら", "Let's catch up over dinner.", "夕食を食べながら話そう。"],
+  "are you free": ["空いてる？（都合を聞く）", "Are you free next Friday?", "来週の金曜は空いてる？"],
+  "works for me": ["私はそれで大丈夫（都合がよい）", "Friday works for me.", "金曜で大丈夫です。"],
+  "talk to you later": ["またあとで話そう（別れ際）", "Talk to you later!", "またね！"],
+
+  // --- 職場 ---
+  "do you have a minute": ["少しお時間ありますか（話しかける前置き）", "Do you have a minute?", "ちょっとよろしいですか？"],
+  "check on": ["〜の様子・進み具合を確認する", "I wanted to check on the report.", "レポートの進捗を確認したかったんです。"],
+  "wait for": ["〜（もの）を待つ", "I'm waiting for the data.", "データを待っています。"],
+  "wait on": ["〜（人）からの返事を待つ", "Who are you waiting on?", "誰の返事待ちですか？"],
+  "hear back": ["返事をもらう", "I haven't heard back yet.", "まだ返事がありません。"],
+  "follow up": ["催促する／その後を確認する", "I'll follow up with them.", "私から催促しておきます。"],
+  "that would really help": ["それは本当に助かります", "Thank you. That would really help.", "ありがとうございます。助かります。"],
+  "anything else": ["ほかに何かありますか", "Anything else you need?", "ほかに必要なものはありますか？"],
+  "could you": ["〜していただけますか（丁寧な依頼）", "Could you review it?", "レビューしていただけますか？"],
+  "when you have time": ["お時間のあるときに（急がせない依頼）", "Could you check it when you have time?", "お時間あるときに確認いただけますか？"],
+  "end of the day": ["その日の終わり／今日中", "Send it to me by the end of the day.", "今日中に送ってください。"],
+  "will do": ["やっておきます（了解の返事）", "Will do.", "承知しました。"],
+  "set up": ["（会議などを）設定する／立ち上げる", "We need to set up a meeting.", "打ち合わせを設定する必要があります。"],
+  "works for you": ["ご都合はいかがですか", "When works for you?", "いつがご都合よろしいですか？"],
+  "how long": ["どのくらいの時間", "How long will it take?", "どのくらいかかりますか？"],
+  "work from home": ["在宅勤務する", "Half of the team is working from home.", "チームの半分は在宅勤務です。"],
+  "got it": ["分かりました（軽い了解）", "Got it. I'll do that.", "了解です。やっておきます。"],
+  "in advance": ["事前に／前もって", "Please share the agenda in advance.", "アジェンダを事前に共有してください。"],
+  "right after": ["〜の直後に", "I'll send it right after this.", "この後すぐ送ります。"],
+
+  // --- 旅行 ---
+  "check in": ["チェックインする／到着手続きをする", "Are you checking in?", "チェックインでしょうか？"],
+  "let me see": ["ええと、確認しますね", "Let me see... yes, we have it.", "確認しますね…はい、ございます。"],
+  "that's right": ["その通りです", "That's right. Three nights.", "その通りです。3泊です。"],
+  "is it possible to": ["〜することは可能ですか（丁寧な依頼）", "Is it possible to get a higher floor?", "高層階にしていただけますか？"],
+  "one more thing": ["もう一つ（追加で頼むときの前置き）", "One more thing — can I get a late checkout?", "もう一つ、レイトチェックアウトはできますか？"],
+  "late checkout": ["レイトチェックアウト（遅い時刻の退出）", "Can I get a late checkout?", "チェックアウトを遅らせられますか？"],
+  "extra charge": ["追加料金", "We can extend it for no extra charge.", "追加料金なしで延長できます。"],
+  "one of": ["〜のうちの1つ", "One of the rooms is available.", "部屋のうち1室が空いています。"],
+  "get to": ["〜に着く／たどり着く", "I'm trying to get to the museum.", "博物館に行きたいのです。"],
+  "look lost": ["道に迷っているように見える", "You look a little lost.", "道に迷っているようですね。"],
+  "can i help you": ["お手伝いしましょうか", "Can I help you?", "何かお困りですか？"],
+  "yes please": ["はい、お願いします", "Yes, please.", "はい、ぜひお願いします。"],
+  "easy to find": ["見つけやすい", "Is it easy to find?", "見つけやすいですか？"],
+  "go straight": ["まっすぐ進む", "Go straight down this street.", "この道をまっすぐ進んでください。"],
+  "turn left": ["左に曲がる", "Turn left at the park.", "公園を左に曲がってください。"],
+  "on your right": ["右手に", "The museum is on your right.", "博物館は右手にあります。"],
+  "can't miss it": ["すぐ分かる／見逃すはずがない", "You can't miss it.", "すぐ分かりますよ。"],
+  "right before": ["〜の直前に", "There's a store right before the park.", "公園の手前に店があります。"],
+  "thanks again": ["改めてありがとう", "Thanks again for your help!", "助けていただき、改めてありがとうございました！"]
+};
+
+const WORDS = {
+  "a": ["1つの（初めて出す名詞に付ける）", "I have a question.", "質問があります。"],
+  "about": ["〜について／およそ〜", "It takes about an hour.", "1時間ほどかかります。"],
+  "actually": ["実は（意外な事実を言うとき）", "Actually, I changed jobs.", "実は転職したんです。"],
+  "advance": ["事前／前もって", "Please send it in advance.", "事前に送ってください。"],
+  "after": ["〜の後で", "I'll call you after the meeting.", "会議の後で電話します。"],
+  "afternoon": ["午後", "How about Wednesday afternoon?", "水曜の午後はどうですか？"],
+  "again": ["もう一度／また", "Could you say that again?", "もう一度言っていただけますか？"],
+  "agenda": ["議題／アジェンダ", "Please share the agenda.", "アジェンダを共有してください。"],
+  "also": ["〜も／さらに", "Also, what time is breakfast?", "あと、朝食は何時ですか？"],
+  "always": ["いつも／必ず", "The first months are always hard.", "最初の数ヶ月はいつも大変です。"],
+  "an": ["1つの（母音の音で始まる語の前）", "It takes an hour.", "1時間かかります。"],
+  "and": ["〜と／そして", "Tea and coffee, please.", "紅茶とコーヒーをお願いします。"],
+  "another": ["別の／もう一つの", "I have another meeting.", "別の会議があります。"],
+  "any": ["何か／いくつか（疑問文・否定文で）", "Do you have any plans?", "何か予定はありますか？"],
+  "anyone": ["誰か", "Should we invite anyone else?", "他に誰か呼びますか？"],
+  "anything": ["何か（1つでも）", "Anything else?", "他に何かありますか？"],
+  "are": ["〜です（be動詞。you/we/they に使う）", "You are early today.", "今日は早いですね。"],
+  "around": ["〜のあたり／周囲", "It's tight around the shoulders.", "肩まわりがきついです。"],
+  "as": ["〜として／〜と同じくらい", "It's not as hard as before.", "前ほど大変ではありません。"],
+  "ask": ["尋ねる／頼む", "I asked them on Monday.", "月曜に依頼しました。"],
+  "asked": ["尋ねた（ask の過去形）", "I asked her yesterday.", "昨日彼女に聞きました。"],
+  "at": ["〜で（場所・時刻の一点）", "Let's meet at the station.", "駅で会いましょう。"],
+  "available": ["空いている／利用できる", "We have one available.", "1つ空きがあります。"],
+  "away": ["離れて／すぐに（right away で）", "It's ten minutes away.", "10分の距離です。"],
+  "back": ["戻って／後ろ", "I'll be back soon.", "すぐ戻ります。"],
+  "battery": ["電池／バッテリー", "I don't have much battery left.", "充電があまり残っていません。"],
+  "be": ["〜である（be動詞の原形）", "It might be tough.", "厳しいかもしれません。"],
+  "been": ["（現在完了で）ずっと〜だった", "I've been busy.", "ずっと忙しかったです。"],
+  "before": ["〜より前に／以前", "Not as often as before.", "以前ほどではありません。"],
+  "big": ["大きい", "It's a big white building.", "大きな白い建物です。"],
+  "book": ["予約する（動詞）／本", "Should I book a meeting room?", "会議室を予約しますか？"],
+  "bought": ["買った（buy の過去形）", "I bought it last week.", "先週買いました。"],
+  "brand": ["ブランド／銘柄", "It depends on the brand.", "ブランドによって違います。"],
+  "breakfast": ["朝食", "What time is breakfast?", "朝食は何時からですか？"],
+  "bring": ["持っていく／持ってくる", "I'll bring some snacks.", "おやつを持っていきます。"],
+  "building": ["建物", "It's a white building.", "白い建物です。"],
+  "busy": ["忙しい", "I've been busy with work.", "仕事で忙しかったです。"],
+  "but": ["しかし／でも", "I like it, but it's expensive.", "気に入っていますが、高いです。"],
+  "by": ["〜までに（期限）／〜によって", "Can you finish it by Friday?", "金曜までに終わりますか？"],
+  "calendar": ["カレンダー／予定表", "Let me check my calendar.", "予定を確認しますね。"],
+  "came": ["来た（come の過去形）", "These just came in.", "これは入荷したばかりです。"],
+  "can": ["〜できる／〜してもよい", "Can I try this on?", "試着できますか？"],
+  "can't": ["〜できない（cannot の短縮）", "I can't make it today.", "今日は行けません。"],
+  "card": ["カード（クレジットカード）", "Card, please.", "カードでお願いします。"],
+  "cash": ["現金", "Will that be cash or card?", "現金かカードどちらですか？"],
+  "changed": ["変えた（change の過去形）", "I changed jobs.", "転職しました。"],
+  "charge": ["料金／請求する", "There's no extra charge.", "追加料金はありません。"],
+  "check": ["確認する／調べる", "Let me check the stock.", "在庫を確認します。"],
+  "checking": ["確認している（check の ing 形）", "Are you checking in?", "チェックインですか？"],
+  "checkout": ["チェックアウト（宿を出る手続き）", "Checkout is at eleven.", "チェックアウトは11時です。"],
+  "choice": ["選択／選んだもの", "Great choice!", "よいお選びですね。"],
+  "city": ["市／都市", "I'm going to the city museum.", "市立博物館に行きます。"],
+  "color": ["色", "The color looked different.", "色が違って見えました。"],
+  "congratulations": ["おめでとう（必ず複数形）", "Congratulations on your new job!", "新しい仕事おめでとう！"],
+  "convenience": ["便利さ（convenience store でコンビニ）", "Is there a convenience store?", "コンビニはありますか？"],
+  "corner": ["角／曲がり角", "It's on the corner.", "角にあります。"],
+  "correct": ["正しい", "Is that correct?", "それで合っていますか？"],
+  "could": ["〜していただけますか（丁寧な依頼）", "Could you help me?", "手伝っていただけますか？"],
+  "course": ["（of course で）もちろん", "Of course.", "もちろんです。"],
+  "data": ["データ", "I'm waiting for the sales data.", "売上データを待っています。"],
+  "day": ["日／1日", "By the end of the day.", "今日中に。"],
+  "definitely": ["ぜひ／確実に（強い同意）", "Definitely. Let's do it.", "ぜひ。やりましょう。"],
+  "depends": ["〜次第である（depend の三人称単数形）", "It depends on the size.", "サイズによります。"],
+  "design": ["デザイン／設計", "She's from the design team.", "彼女はデザインチームの人です。"],
+  "details": ["詳細（複数形で使う）", "I'll text you the details.", "詳細をメッセージします。"],
+  "didn't": ["〜しなかった（did not の短縮）", "The size didn't fit.", "サイズが合いませんでした。"],
+  "different": ["違う／異なる", "The color looked different.", "色が違って見えました。"],
+  "dinner": ["夕食", "Let's catch up over dinner.", "夕食を食べながら話そう。"],
+  "do": ["する／（疑問文を作る助動詞）", "Do you have a minute?", "少しお時間ありますか？"],
+  "does": ["do の三人称単数形", "How does it fit?", "サイズはいかがですか？"],
+  "don't": ["〜しない（do not の短縮）", "I don't have much time.", "あまり時間がありません。"],
+  "double": ["ダブルの／2倍の", "A double room, please.", "ダブルルームをお願いします。"],
+  "down": ["（道を）進んで／下へ", "Go straight down this street.", "この道をまっすぐ進んで。"],
+  "drinks": ["飲み物（drink の複数形）", "I'll bring drinks.", "飲み物を持っていきます。"],
+  "easy": ["簡単な／やさしい", "It's easy to find.", "見つけやすいです。"],
+  "eight": ["8／8時", "We're meeting at eight.", "8時に集合です。"],
+  "else": ["ほかに（anything/anyone の後ろに置く）", "Anything else?", "ほかに何かありますか？"],
+  "end": ["終わり／終える", "By the end of the day.", "今日中に。"],
+  "evening": ["夕方／晩", "Good evening.", "こんばんは。"],
+  "exactly": ["まさにその通り（強い同意）", "Exactly. I feel the same.", "本当にそれです。同じ気持ちです。"],
+  "exchange": ["交換する／交換", "Can I exchange it?", "交換できますか？"],
+  "extend": ["延長する", "We can extend it to noon.", "12時まで延長できます。"],
+  "extra": ["追加の／余分な", "There's no extra charge.", "追加料金はありません。"],
+  "fall": ["秋（米）／落ちる", "I'm looking for a fall jacket.", "秋物のジャケットを探しています。"],
+  "far": ["遠い／遠くに", "Is it far from here?", "ここから遠いですか？"],
+  "feeling": ["気持ち／感じ", "I know the feeling.", "その気持ち分かります。"],
+  "few": ["少数の（a few で「2〜3の」）", "A few of us are going.", "何人かで行きます。"],
+  "fifteen": ["15", "It's a fifteen-minute walk.", "歩いて15分です。"],
+  "find": ["見つける", "Is it easy to find?", "見つけやすいですか？"],
+  "fine": ["大丈夫／結構です", "Online is fine.", "オンラインで大丈夫です。"],
+  "finish": ["終える／仕上げる", "Can you finish it by Friday?", "金曜までに終わりますか？"],
+  "finished": ["終えた（finish の過去形）", "I've finished seventy percent.", "7割終わりました。"],
+  "first": ["最初の／1番目の", "The first few months are hard.", "最初の数ヶ月は大変です。"],
+  "fit": ["（サイズが）合う", "It doesn't fit.", "サイズが合いません。"],
+  "fits": ["合う（fit の三人称単数形）", "This one fits perfectly.", "これはぴったりです。"],
+  "fitting": ["試着（fitting room で試着室）", "Where's the fitting room?", "試着室はどこですか？"],
+  "floor": ["階／床", "It's on the twelfth floor.", "12階です。"],
+  "follow": ["ついていく（follow up で催促する）", "I'll follow up later.", "後で催促します。"],
+  "for": ["〜のために／〜の間", "I'm looking for a jacket.", "ジャケットを探しています。"],
+  "forward": ["前へ（look forward to で楽しみにする）", "I look forward to it.", "楽しみにしています。"],
+  "four": ["4／4時", "Is four o'clock okay?", "4時で大丈夫ですか？"],
+  "free": ["無料の／空いている", "Are you free on Friday?", "金曜は空いていますか？"],
+  "friday": ["金曜日", "Are you free next Friday?", "来週の金曜は空いていますか？"],
+  "from": ["〜から", "It's an hour from here.", "ここから1時間です。"],
+  "fun": ["楽しい（名詞扱い。That sounds fun）", "That sounds fun!", "楽しそう！"],
+  "get": ["得る／手に入れる／着く", "Can I get a late checkout?", "レイトチェックアウトできますか？"],
+  "go": ["行く", "Where are you going?", "どこに行くの？"],
+  "going": ["行く（go の ing 形）／〜する予定", "I was going to relax.", "ゆっくりするつもりでした。"],
+  "good": ["よい／元気な", "I've been good.", "元気にしています。"],
+  "got": ["get の過去形（Got it. で了解）", "Got it.", "分かりました。"],
+  "grab": ["さっと手に入れる／軽く食べる", "Let's grab lunch.", "お昼を軽く食べよう。"],
+  "grand": ["壮大な（ホテル名などに使う）", "Welcome to the Grand Hotel.", "グランドホテルへようこそ。"],
+  "great": ["すばらしい／いいですね", "Great! See you then.", "いいですね。ではその時に。"],
+  "gym": ["ジム／体育館", "Are you still going to the gym?", "まだジムに通ってる？"],
+  "half": ["半分", "Half of the team works from home.", "チームの半分は在宅です。"],
+  "hard": ["難しい／きつい", "It's not too hard.", "そんなにきつくありません。"],
+  "have": ["持っている／（完了形を作る）", "Do you have the receipt?", "レシートはお持ちですか？"],
+  "haven't": ["まだ〜していない（have not の短縮）", "I haven't heard back.", "まだ返事がありません。"],
+  "heard": ["聞いた（hear の過去形）", "I haven't heard back yet.", "まだ返事をもらっていません。"],
+  "hello": ["こんにちは", "Hello, how can I help you?", "こんにちは、どうされましたか？"],
+  "help": ["助ける／手伝い", "Can I help you?", "お手伝いしましょうか？"],
+  "here": ["ここに／こちらに", "It's an hour from here.", "ここから1時間です。"],
+  "here's": ["これが〜です（here is の短縮。物を差し出すとき）", "Here's a large.", "こちらがLサイズです。"],
+  "fifteen-minute": ["15分の（数字と単位をつないで形容詞にすると単位は単数形）", "It's a fifteen-minute walk.", "歩いて15分です。"],
+  "wi-fi": ["Wi-Fi（無線インターネット）", "Is there Wi-Fi in the room?", "部屋にWi-Fiはありますか？"],
+  "tanaka-san": ["田中さん（日本語の敬称はそのまま付けて呼ぶことが多い）", "Let's include Tanaka-san.", "田中さんも入れましょう。"],
+  "hey": ["やあ（親しい相手への呼びかけ）", "Hey! How are you?", "やあ！元気？"],
+  "hi": ["やあ／こんにちは", "Hi! Nice to see you.", "やあ、会えてうれしいよ。"],
+  "higher": ["より高い（high の比較級）", "Can I get a higher floor?", "もっと上の階にできますか？"],
+  "hiking": ["ハイキング", "We're going hiking.", "ハイキングに行きます。"],
+  "holder": ["入れ物／ホルダー", "It's on the key card holder.", "カードキーのホルダーにあります。"],
+  "home": ["家／自宅に", "I'll relax at home.", "家でゆっくりします。"],
+  "hotel": ["ホテル", "Welcome to our hotel.", "当ホテルへようこそ。"],
+  "hour": ["1時間", "It takes about an hour.", "1時間ほどかかります。"],
+  "how": ["どのように／どれくらい", "How does it fit?", "サイズはいかがですか？"],
+  "how's": ["〜はどう？（how is の短縮）", "How's the new job?", "新しい仕事はどう？"],
+  "i": ["私は", "I'm looking for a jacket.", "ジャケットを探しています。"],
+  "i'd": ["I would の短縮（I'd like で〜したい）", "I'd like to return this.", "これを返品したいです。"],
+  "i'll": ["I will の短縮（〜します）", "I'll take it.", "これをください。"],
+  "i'm": ["I am の短縮（私は〜です）", "I'm looking for a jacket.", "ジャケットを探しています。"],
+  "i've": ["I have の短縮（完了形で使う）", "I've been busy.", "忙しかったです。"],
+  "idea": ["考え／アイデア", "Good idea.", "いい考えですね。"],
+  "if": ["もし〜なら", "If you have navy, I'll take it.", "ネイビーがあればそれにします。"],
+  "impressive": ["立派な／すごい", "That's impressive.", "それはすごいですね。"],
+  "in": ["〜の中に／〜に", "It's in the room.", "部屋の中にあります。"],
+  "include": ["含める／入れる", "We should include Tanaka-san.", "田中さんも入れましょう。"],
+  "invitation": ["招待／招待状", "Could you send the invitation?", "招待を送ってもらえますか？"],
+  "invite": ["招待する／呼ぶ", "Should we invite anyone else?", "他に誰か呼びますか？"],
+  "is": ["〜です（be動詞。he/she/it に使う）", "It is on the second floor.", "2階にあります。"],
+  "it": ["それ（前に出たものを指す）", "I'll take it.", "それをください。"],
+  "it's": ["それは〜です（it is の短縮）", "It's a little tight.", "少しきついです。"],
+  "jacket": ["ジャケット／上着", "I'm looking for a jacket.", "ジャケットを探しています。"],
+  "job": ["仕事／職", "How's the new job?", "新しい仕事はどう？"],
+  "jobs": ["仕事（job の複数形。change jobs で転職）", "I changed jobs.", "転職しました。"],
+  "join": ["参加する／加わる", "Want to join?", "参加する？"],
+  "just": ["ちょうど／ただ〜だけ", "These just came in.", "入荷したばかりです。"],
+  "key": ["鍵／キー", "It's on your key card.", "カードキーにあります。"],
+  "know": ["知っている／分かる", "I know the feeling.", "その気持ち分かります。"],
+  "large": ["Lサイズ／大きい", "Here's a large.", "こちらがLサイズです。"],
+  "larger": ["もっと大きい（large の比較級）", "Do you have a larger size?", "もっと大きいサイズはありますか？"],
+  "last": ["前の／最後の", "I bought it last week.", "先週買いました。"],
+  "late": ["遅い／遅れて", "Can I get a late checkout?", "遅いチェックアウトはできますか？"],
+  "later": ["後で（late の比較級）", "Talk to you later.", "また後で話しましょう。"],
+  "learn": ["学ぶ／覚える", "There's a lot to learn.", "覚えることが多いです。"],
+  "leaving": ["出発する（leave の ing 形）", "What time are you leaving?", "何時に出発しますか？"],
+  "left": ["左／残っている（leave の過去形）", "I don't have much battery left.", "充電があまり残っていません。"],
+  "let": ["〜させる（Let me 〜 で「私に〜させて」）", "Let me check.", "確認させてください。"],
+  "like": ["好き／〜のような", "I like it so far.", "今のところ気に入っています。"],
+  "link": ["リンク／URL", "I'll send the link.", "リンクを送ります。"],
+  "little": ["少し／小さい", "It's a little tight.", "少しきついです。"],
+  "long": ["長い／どれくらい（How long）", "How long will it take?", "どれくらいかかりますか？"],
+  "look": ["見る／〜に見える", "You look lost.", "道に迷っているようですね。"],
+  "looked": ["見えた（look の過去形）", "The color looked different.", "色が違って見えました。"],
+  "looking": ["探している／〜に見える", "I'm looking for a jacket.", "ジャケットを探しています。"],
+  "lost": ["道に迷った／失った", "You look a little lost.", "少し迷っているようですね。"],
+  "lot": ["たくさん（a lot of で多くの）", "There's a lot to learn.", "学ぶことがたくさんあります。"],
+  "lunch": ["昼食", "Should we grab lunch?", "お昼を買っていこうか？"],
+  "make": ["作る／（make it で都合をつける）", "I'll try to make it.", "行けるようにします。"],
+  "may": ["〜してもよいですか（丁寧な許可）", "May I ask your name?", "お名前をお伺いできますか？"],
+  "me": ["私に／私を", "Send it to me.", "私に送ってください。"],
+  "medium": ["Mサイズ／中くらい", "I usually wear a medium.", "普段はMサイズです。"],
+  "meeting": ["会議／打ち合わせ", "I have another meeting.", "別の会議があります。"],
+  "might": ["〜かもしれない（弱い推量）", "Eight might be tough.", "8時は厳しいかもしれません。"],
+  "minute": ["1分／少しの時間", "Do you have a minute?", "少しお時間ありますか？"],
+  "mirrors": ["鏡（mirror の複数形）", "It's next to the mirrors.", "鏡の隣です。"],
+  "miss": ["見逃す／恋しく思う", "You can't miss it.", "すぐ分かりますよ。"],
+  "monday": ["月曜日", "I asked them on Monday.", "月曜に依頼しました。"],
+  "month": ["月（1ヶ月）", "I changed jobs last month.", "先月転職しました。"],
+  "months": ["月（month の複数形）", "The first few months are hard.", "最初の数ヶ月は大変です。"],
+  "more": ["もっと／さらに", "One more thing.", "もう一つあります。"],
+  "morning": ["朝／午前", "By tomorrow morning.", "明日の朝までに。"],
+  "much": ["たくさん（否定・疑問で使う）", "I don't have much time.", "あまり時間がありません。"],
+  "museum": ["博物館／美術館", "I'm going to the museum.", "博物館に行きます。"],
+  "my": ["私の", "Let me check my calendar.", "予定を確認します。"],
+  "navy": ["ネイビー（濃紺）", "Do you have it in navy?", "ネイビーはありますか？"],
+  "need": ["必要とする", "Anything you need?", "何か必要なものはありますか？"],
+  "new": ["新しい", "How's the new job?", "新しい仕事はどうですか？"],
+  "next": ["次の／隣の", "Are you free next Friday?", "来週の金曜は空いていますか？"],
+  "nice": ["よい／親切な", "The people are nice.", "人がいいです。"],
+  "nights": ["泊（night の複数形。宿泊数の数え方）", "A room for three nights.", "3泊で部屋を1つ。"],
+  "no": ["いいえ／〜がない", "There's no extra charge.", "追加料金はありません。"],
+  "noon": ["正午（12時）", "We can extend it to noon.", "12時まで延長できます。"],
+  "not": ["〜でない", "It's not too hard.", "そんなにきつくありません。"],
+  "o'clock": ["〜時（ちょうど）", "Is four o'clock okay?", "4時でよろしいですか？"],
+  "of": ["〜の", "Half of the team is here.", "チームの半分がここにいます。"],
+  "often": ["よく／頻繁に", "I don't go as often as before.", "以前ほど頻繁には行きません。"],
+  "oh": ["あっ／ああ（思い出したとき）", "Oh, one more thing.", "あ、もう一つ。"],
+  "okay": ["大丈夫／いいですよ", "Is four okay?", "4時で大丈夫ですか？"],
+  "on": ["〜の上に／〜に（曜日・日付）", "See you on Saturday.", "土曜に会いましょう。"],
+  "one": ["1つ／1つのもの", "This one fits.", "こちらはぴったりです。"],
+  "online": ["オンラインで", "Online is fine.", "オンラインで大丈夫です。"],
+  "or": ["または", "Cash or card?", "現金かカードですか？"],
+  "our": ["私たちの", "Let me check our stock.", "在庫を確認します。"],
+  "over": ["〜を越えて／〜しながら（over dinner）", "Let's talk over dinner.", "食事しながら話しましょう。"],
+  "park": ["公園／駐車する", "Turn left at the park.", "公園を左に曲がってください。"],
+  "particular": ["特定の／特別な", "Anything in particular?", "何か特にお探しですか？"],
+  "password": ["パスワード", "The password is on the card.", "パスワードはカードに書いてあります。"],
+  "people": ["人々（person の複数形）", "The people are nice.", "人がいいです。"],
+  "percent": ["パーセント", "I've finished seventy percent.", "7割終わりました。"],
+  "perfect": ["完璧な／それでいいです", "Perfect. Thank you.", "完璧です。ありがとう。"],
+  "perfectly": ["完璧に／ぴったりと", "It fits perfectly.", "ぴったり合います。"],
+  "phone": ["電話／携帯", "My phone is almost dead.", "携帯の充電がもうありません。"],
+  "plans": ["予定（plan の複数形で使う）", "Do you have any plans?", "何か予定はありますか？"],
+  "please": ["お願いします（依頼を丁寧にする）", "Card, please.", "カードでお願いします。"],
+  "possible": ["可能な", "Is it possible to change it?", "変更は可能ですか？"],
+  "prefer": ["〜のほうを好む", "Would you prefer an exchange?", "交換のほうがよろしいですか？"],
+  "prepare": ["準備する", "I'll prepare it by tomorrow.", "明日までに準備します。"],
+  "pretty": ["かなり／まあまあ（pretty good で「まあいい」）", "Pretty good, thanks.", "まあまあです、ありがとう。"],
+  "process": ["処理する／手続きする", "I'll process it right away.", "すぐに手続きします。"],
+  "project": ["プロジェクト／案件", "It's about the new project.", "新しい案件についてです。"],
+  "really": ["本当に／とても", "That would really help.", "本当に助かります。"],
+  "reason": ["理由", "May I ask the reason?", "理由をお伺いできますか？"],
+  "receipt": ["レシート／領収書（発音は「リシート」）", "Do you have the receipt?", "レシートはお持ちですか？"],
+  "refund": ["返金", "Would you like a refund?", "返金をご希望ですか？"],
+  "relax": ["くつろぐ／休む", "I'll relax at home.", "家でゆっくりします。"],
+  "report": ["報告書／レポート", "I wanted to check on the report.", "レポートの進捗を確認したかったのです。"],
+  "reservation": ["予約", "I have a reservation.", "予約しています。"],
+  "return": ["返品する／戻る", "I'd like to return this.", "これを返品したいです。"],
+  "review": ["確認する／レビューする", "Could you review it?", "確認していただけますか？"],
+  "right": ["右／正しい／すぐに", "That's right.", "その通りです。"],
+  "room": ["部屋", "A double room, please.", "ダブルルームをお願いします。"],
+  "sales": ["売上／営業（部門）", "I'm waiting for the sales data.", "売上データを待っています。"],
+  "same": ["同じ", "Do you have the same one?", "同じものはありますか？"],
+  "san": ["〜さん（日本語の敬称。英語では名前に付けて使う）", "Let's invite Tanaka-san.", "田中さんを呼びましょう。"],
+  "saturday": ["土曜日", "See you on Saturday.", "土曜に会いましょう。"],
+  "sawai": ["澤井（人名）", "I have a reservation under Sawai.", "澤井の名前で予約しています。"],
+  "second": ["2番目の／2階（米では1階が ground でなく first）", "It's on the second floor.", "2階です。"],
+  "see": ["見る／分かる", "I see.", "なるほど。"],
+  "send": ["送る", "I'll send it this afternoon.", "今日の午後に送ります。"],
+  "set": ["設定する／置く", "Let's set up a meeting.", "打ち合わせを設定しましょう。"],
+  "seventy": ["70", "About seventy percent is done.", "7割ほど終わっています。"],
+  "share": ["共有する", "Please share the agenda.", "アジェンダを共有してください。"],
+  "should": ["〜すべき／〜しましょうか", "Should we grab lunch?", "お昼を買っていきましょうか？"],
+  "shoulders": ["肩（shoulder の複数形）", "It's tight around the shoulders.", "肩まわりがきついです。"],
+  "simple": ["簡単な／単純な", "It's simple.", "簡単ですよ。"],
+  "six": ["6／6時", "Breakfast starts at six.", "朝食は6時からです。"],
+  "size": ["サイズ／大きさ", "What size do you wear?", "サイズはおいくつですか？"],
+  "snacks": ["軽食／おやつ（複数形で使う）", "I'll bring snacks.", "おやつを持っていきます。"],
+  "so": ["とても／だから", "Thank you so much.", "本当にありがとう。"],
+  "some": ["いくつかの／少しの", "I'll bring some drinks.", "飲み物を少し持っていきます。"],
+  "soon": ["すぐに／近いうちに", "Let's catch up soon.", "近いうちに話しましょう。"],
+  "sounds": ["〜のように聞こえる（That sounds 〜 で反応）", "That sounds fun.", "楽しそうですね。"],
+  "station": ["駅", "We're meeting at the station.", "駅で集合です。"],
+  "still": ["まだ／今でも", "Are you still going?", "まだ通っていますか？"],
+  "stock": ["在庫", "Let me check our stock.", "在庫を確認します。"],
+  "store": ["店", "Is there a store nearby?", "近くに店はありますか？"],
+  "straight": ["まっすぐに", "Go straight down this street.", "この道をまっすぐ進んで。"],
+  "street": ["通り／道", "Go down this street.", "この道を進んでください。"],
+  "sure": ["もちろん／いいですよ", "Sure. No problem.", "もちろん。大丈夫です。"],
+  "sweater": ["セーター", "I'd like to return this sweater.", "このセーターを返品したいです。"],
+  "take": ["取る／（時間が）かかる", "How long will it take?", "どれくらいかかりますか？"],
+  "talk": ["話す", "Talk to you later.", "また後で話しましょう。"],
+  "tanaka": ["田中（人名）", "Let's include Tanaka-san.", "田中さんも入れましょう。"],
+  "team": ["チーム／部門", "She's on the design team.", "彼女はデザインチームです。"],
+  "ten": ["10／10時", "Breakfast is until ten.", "朝食は10時までです。"],
+  "text": ["メッセージを送る（動詞）／文章", "I'll text you the details.", "詳細をメッセージします。"],
+  "thank": ["感謝する", "Thank you for your help.", "ご協力ありがとうございます。"],
+  "thanks": ["ありがとう（Thank you よりくだけた形）", "Thanks again!", "改めてありがとう！"],
+  "that": ["それ／あれ／〜ということ", "That sounds good.", "それはいいですね。"],
+  "that's": ["それは〜です（that is の短縮）", "That's right.", "その通りです。"],
+  "the": ["その（すでに話に出たものに付ける）", "Where is the fitting room?", "試着室はどこですか？"],
+  "them": ["彼ら・それらを", "I asked them on Monday.", "月曜に彼らに頼みました。"],
+  "then": ["それから／その時", "See you then.", "ではその時に。"],
+  "there": ["そこに／（There is で〜がある）", "It's over there.", "あちらです。"],
+  "there's": ["〜があります（there is の短縮）", "There's a store on the corner.", "角に店があります。"],
+  "these": ["これら（this の複数形）", "These just came in.", "これらは入荷したばかりです。"],
+  "thing": ["こと／もの", "One more thing.", "もう一つあります。"],
+  "think": ["思う／考える", "I think so.", "そう思います。"],
+  "thirty": ["30（six thirty で6時半）", "Breakfast is from six thirty.", "朝食は6時半からです。"],
+  "this": ["これ／この", "I'd like to return this.", "これを返品したいです。"],
+  "three": ["3", "A room for three nights.", "3泊の部屋を1つ。"],
+  "tight": ["きつい／ぴったりすぎる", "It's a little tight.", "少しきついです。"],
+  "time": ["時間／時刻", "What time is breakfast?", "朝食は何時ですか？"],
+  "to": ["〜へ／〜に（to＋動詞で「〜すること」）", "I'd like to try it on.", "試着したいのですが。"],
+  "today": ["今日", "How can I help you today?", "本日はどうされましたか？"],
+  "tomorrow": ["明日", "I'll prepare it by tomorrow.", "明日までに準備します。"],
+  "too": ["〜すぎる／〜も", "It's not too hard.", "そんなに難しくありません。"],
+  "tough": ["きつい／大変な", "Eight might be tough.", "8時は厳しいかもしれません。"],
+  "trail": ["（山などの）コース／小道", "There's a trail near here.", "この近くにコースがあります。"],
+  "try": ["試す／やってみる", "I'll try to make it.", "行けるようにやってみます。"],
+  "trying": ["やろうとしている（try の ing 形）", "I'm trying to get to the museum.", "博物館に行こうとしています。"],
+  "turn": ["曲がる／順番", "Turn left at the park.", "公園を左に曲がって。"],
+  "twelfth": ["12番目の（twelve の序数）", "It's on the twelfth floor.", "12階です。"],
+  "twice": ["2回", "I go twice a week.", "週2回行きます。"],
+  "under": ["〜の名前で／〜の下に", "I have a reservation under Sawai.", "澤井の名前で予約しています。"],
+  "understood": ["承知しました（了解の丁寧な返事）", "Understood. I'll do it.", "承知しました。やります。"],
+  "until": ["〜まで（ずっと）", "Go straight until you see a park.", "公園が見えるまでまっすぐ。"],
+  "up": ["上へ／（follow up などで意味を作る）", "I'll follow up with them.", "私から催促します。"],
+  "us": ["私たちを／私たちに", "A few of us are going.", "何人かで行きます。"],
+  "usually": ["普段は／たいてい", "I usually wear a medium.", "普段はMサイズです。"],
+  "waiting": ["待っている（wait の ing 形）", "I'm waiting for the data.", "データを待っています。"],
+  "walk": ["歩く／徒歩", "It's a ten-minute walk.", "歩いて10分です。"],
+  "want": ["ほしい／〜したい（口語）", "Want to join?", "一緒に来る？"],
+  "wanted": ["〜したかった（want の過去形）", "I wanted to check the report.", "レポートを確認したかったのです。"],
+  "was": ["〜だった（be動詞の過去形）", "I was going to relax.", "ゆっくりするつもりでした。"],
+  "way": ["道／方法（on the way で途中で）", "There's a store on the way.", "途中に店があります。"],
+  "we": ["私たちは", "We're meeting at eight.", "8時に集合です。"],
+  "we're": ["私たちは〜です（we are の短縮）", "We're meeting at the station.", "駅で集合です。"],
+  "wear": ["着る／着ている", "What size do you wear?", "サイズはおいくつですか？"],
+  "wednesday": ["水曜日", "How about Wednesday?", "水曜はどうですか？"],
+  "week": ["週", "I bought it last week.", "先週買いました。"],
+  "weekend": ["週末", "Any plans for the weekend?", "週末の予定は？"],
+  "welcome": ["歓迎する／ようこそ", "Welcome to the Grand Hotel.", "グランドホテルへようこそ。"],
+  "what": ["何／どんな", "What size do you wear?", "サイズはおいくつですか？"],
+  "when": ["いつ／〜のとき", "When works for you?", "いつがご都合よいですか？"],
+  "where": ["どこ", "Where is the fitting room?", "試着室はどこですか？"],
+  "while": ["〜の間（a while で「しばらく」）", "It's been a while.", "久しぶりです。"],
+  "white": ["白い", "It's a big white building.", "大きな白い建物です。"],
+  "who": ["誰", "Who are you waiting on?", "誰の返事待ちですか？"],
+  "will": ["〜します（未来・意志）", "I'll send it today.", "今日送ります。"],
+  "with": ["〜と一緒に／〜を持って", "I'll follow up with them.", "彼らに催促します。"],
+  "work": ["仕事／働く／（都合が）合う", "I've been busy with work.", "仕事で忙しかったです。"],
+  "working": ["働いている（work の ing 形）", "I'm working from home.", "在宅勤務しています。"],
+  "works": ["都合が合う（work の三人称単数形）", "Friday works for me.", "金曜で大丈夫です。"],
+  "would": ["〜でしょう（丁寧表現を作る）", "Would you like a refund?", "返金をご希望ですか？"],
+  "yes": ["はい", "Yes, here it is.", "はい、これです。"],
+  "you": ["あなたは／あなたを", "How about you?", "あなたはどうですか？"],
+  "your": ["あなたの", "Thank you for your help.", "ご協力ありがとうございます。"]
+};
+
+// 活用形 → 見出し語（辞書に無い形でも意味を引けるようにする）
+const LEMMA_MAP = {
+  "asking": "ask", "asks": "ask", "brings": "bring", "brought": "bring",
+  "buy": "bought", "buying": "bought", "buys": "bought",
+  "change": "changed", "changes": "changed", "changing": "changed",
+  "checked": "check", "checks": "check", "choices": "choice", "colors": "color",
+  "come": "came", "comes": "came", "coming": "came", "corners": "corner",
+  "days": "day", "detail": "details", "drink": "drinks", "exchanged": "exchange",
+  "exchanging": "exchange", "extended": "extend", "extending": "extend",
+  "finds": "find", "finishes": "finish", "finishing": "finish", "fitted": "fit",
+  "floors": "floor", "followed": "follow", "following": "follow", "follows": "follow",
+  "gets": "get", "getting": "get", "goes": "go", "gone": "go", "grabbed": "grab",
+  "have": "have", "has": "have", "had": "have", "having": "have",
+  "hear": "heard", "hearing": "heard", "hears": "heard",
+  "hours": "hour", "ideas": "idea", "included": "include", "includes": "include",
+  "including": "include", "invited": "invite", "invites": "invite",
+  "inviting": "invite", "jackets": "jacket", "joined": "join", "joining": "join",
+  "joins": "join", "keys": "key", "knew": "know", "knows": "know",
+  "leave": "leaving", "leaves": "leaving", "links": "link", "looks": "look",
+  "made": "make", "makes": "make", "making": "make", "meet": "meeting",
+  "meetings": "meeting", "meets": "meeting", "met": "meeting", "minutes": "minute",
+  "mirror": "mirrors", "misses": "miss", "missing": "miss", "museums": "museum",
+  "needed": "need", "needs": "need", "parks": "park", "person": "people",
+  "plan": "plans", "prepared": "prepare", "prepares": "prepare",
+  "preparing": "prepare", "prefers": "prefer", "preferred": "prefer",
+  "processed": "process", "processing": "process", "projects": "project",
+  "reasons": "reason", "receipts": "receipt", "refunds": "refund",
+  "relaxed": "relax", "relaxing": "relax", "reports": "report",
+  "reservations": "reservation", "returned": "return", "returning": "return",
+  "returns": "return", "reviewed": "review", "reviewing": "review",
+  "reviews": "review", "rooms": "room", "sent": "send", "sending": "send",
+  "sends": "send", "shared": "share", "shares": "share", "sharing": "share",
+  "shoulder": "shoulders", "sizes": "size", "snack": "snacks", "sound": "sounds",
+  "sounded": "sounds", "stations": "station", "stores": "store",
+  "streets": "street", "sweaters": "sweater", "taken": "take", "takes": "take",
+  "taking": "take", "talked": "talk", "talking": "talk", "talks": "talk",
+  "teams": "team", "texted": "text", "texting": "text", "texts": "text",
+  "things": "thing", "thinking": "think", "thinks": "think", "thought": "think",
+  "times": "time", "took": "take", "trails": "trail", "tried": "try",
+  "tries": "try", "turned": "turn", "turning": "turn", "turns": "turn",
+  "understand": "understood", "understands": "understood", "waited": "waiting",
+  "waits": "waiting", "wait": "waiting", "walked": "walk", "walking": "walk",
+  "walks": "walk", "wants": "want", "weeks": "week", "weekends": "weekend",
+  "were": "was", "wore": "wear", "worked": "work", "worn": "wear",
+  "night": "nights", "month": "month", "job": "job", "were": "was",
+  "am": "are", "been": "been", "being": "be", "is": "is"
+};
+
+</script>
+<script>
+// ============================================================
+// 会話データ
+// turns: p = 相手（PCが話す） / m = 自分（あなたが話す）
+// シーンを増やしたい時は、この DATA に同じ形式で追加するだけ。
+// ============================================================
+const DATA = [
+  {
+    id: "shopping", emoji: "🛍️", name: "買い物",
+    desc: "店員さんとのやり取り",
+    scenes: [
+      {
+        id: "clothes", name: "服を探す・試着する",
+        turns: [
+          { s:"p", en:"Hi there! Are you looking for anything in particular today?", ja:"いらっしゃいませ。今日は何かお探しですか？" },
+          { s:"m", en:"Yes, I'm looking for a jacket for the fall.", ja:"はい、秋物のジャケットを探しています。" },
+          { s:"p", en:"Great! What size do you usually wear?", ja:"かしこまりました。普段のサイズはおいくつですか？" },
+          { s:"m", en:"I usually wear a medium, but it depends on the brand.", ja:"普段はMサイズですが、ブランドによって変わります。" },
+          { s:"p", en:"These just came in. Would you like to try one on?", ja:"こちらは入荷したばかりです。ご試着なさいますか？" },
+          { s:"m", en:"Sure. Where is the fitting room?", ja:"はい。試着室はどこですか？" },
+          { s:"p", en:"It's right over there, next to the mirrors. How does it fit?", ja:"あちらの鏡の隣です。（試着後）サイズはいかがですか？" },
+          { s:"m", en:"It's a little tight around the shoulders. Do you have a larger size?", ja:"肩まわりが少しきついです。もう一つ大きいサイズはありますか？" },
+          { s:"p", en:"Let me check... Here's a large.", ja:"お調べしますね…こちらがLサイズです。" },
+          { s:"m", en:"This one fits perfectly. I'll take it.", ja:"これはぴったりです。これをください。" },
+          { s:"p", en:"Great choice! Will that be cash or card?", ja:"ありがとうございます。お支払いは現金ですか、カードですか？" },
+          { s:"m", en:"Card, please.", ja:"カードでお願いします。" },
+        ]
+      },
+      {
+        id: "return", name: "返品・交換する",
+        turns: [
+          { s:"p", en:"Hello, how can I help you today?", ja:"いらっしゃいませ。本日はどうされましたか？" },
+          { s:"m", en:"I'd like to return this sweater. I bought it last week.", ja:"このセーターを返品したいのですが。先週買いました。" },
+          { s:"p", en:"Sure. May I ask the reason for the return?", ja:"かしこまりました。返品の理由をお伺いしてもよろしいですか？" },
+          { s:"m", en:"The size didn't fit, and the color looked different at home.", ja:"サイズが合わなくて、家で見ると色も違って見えたんです。" },
+          { s:"p", en:"I see. Do you have the receipt with you?", ja:"なるほど。レシートはお持ちですか？" },
+          { s:"m", en:"Yes, here it is.", ja:"はい、こちらです。" },
+          { s:"p", en:"Would you like a refund, or would you prefer to exchange it?", ja:"返金がよろしいですか、それとも交換をご希望ですか？" },
+          { s:"m", en:"If you have the same one in navy, I'd like to exchange it.", ja:"同じものでネイビーがあれば交換したいです。" },
+          { s:"p", en:"Let me check our stock. Yes, we have one in a medium.", ja:"在庫を確認しますね。はい、Mサイズが一点ございます。" },
+          { s:"m", en:"Perfect. Can I exchange it for that one?", ja:"よかった。それと交換してもらえますか？" },
+          { s:"p", en:"Of course. I'll process that right away.", ja:"もちろんです。すぐにお手続きしますね。" },
+          { s:"m", en:"Thank you for your help.", ja:"ありがとうございます。助かりました。" },
+        ]
+      },
+    ]
+  },
+  {
+    id: "friends", emoji: "☕", name: "友達との会話",
+    desc: "カジュアルな日常会話",
+    scenes: [
+      {
+        id: "weekend", name: "週末の予定を話す",
+        turns: [
+          { s:"p", en:"Hey! Do you have any plans for the weekend?", ja:"ねえ、週末は何か予定ある？" },
+          { s:"m", en:"Not really. I was just going to relax at home. How about you?", ja:"特にないよ。家でゆっくりしようと思ってた。そっちは？" },
+          { s:"p", en:"A few of us are going hiking on Saturday. Want to join?", ja:"土曜に何人かでハイキングに行くんだ。一緒に来る？" },
+          { s:"m", en:"That sounds fun! Where are you going?", ja:"楽しそう！どこに行くの？" },
+          { s:"p", en:"There's a trail about an hour from here. It's not too hard.", ja:"ここから1時間くらいの所にコースがあるんだ。そんなにきつくないよ。" },
+          { s:"m", en:"Nice. What time are you leaving?", ja:"いいね。何時に出発するの？" },
+          { s:"p", en:"We're meeting at the station at eight in the morning.", ja:"朝8時に駅に集合だよ。" },
+          { s:"m", en:"Eight might be tough, but I'll try to make it.", ja:"8時はちょっと厳しいかもだけど、行けるようにするよ。" },
+          { s:"p", en:"Great! Should we grab lunch on the way?", ja:"やった！途中でお昼ご飯買っていこうか？" },
+          { s:"m", en:"Good idea. I'll bring some snacks and drinks too.", ja:"いいね。おやつと飲み物も持っていくよ。" },
+          { s:"p", en:"Perfect. See you on Saturday!", ja:"完璧。じゃあ土曜にね！" },
+          { s:"m", en:"See you then. I'm looking forward to it.", ja:"じゃあね。楽しみにしてるよ。" },
+        ]
+      },
+      {
+        id: "catchup", name: "久しぶりに近況を聞く",
+        turns: [
+          { s:"p", en:"It's been a while! How have you been?", ja:"久しぶり！元気にしてた？" },
+          { s:"m", en:"I've been good, just busy with work. How about you?", ja:"元気だよ、仕事でバタバタしてたけど。そっちは？" },
+          { s:"p", en:"Pretty good. I actually changed jobs last month.", ja:"まあまあかな。実は先月転職したんだ。" },
+          { s:"m", en:"Really? Congratulations! How's the new job?", ja:"本当に？おめでとう！新しい仕事はどう？" },
+          { s:"p", en:"I like it so far. The people are nice, but there's a lot to learn.", ja:"今のところ気に入ってるよ。人はいいけど、覚えることが多くて。" },
+          { s:"m", en:"I know the feeling. The first few months are always hard.", ja:"その気持ち分かるよ。最初の数ヶ月はいつも大変だよね。" },
+          { s:"p", en:"Exactly. By the way, are you still going to the gym?", ja:"ほんとそれ。ところで、まだジムには通ってるの？" },
+          { s:"m", en:"Not as often as before, but I try to go twice a week.", ja:"前ほどじゃないけど、週2回は行くようにしてるよ。" },
+          { s:"p", en:"That's still impressive. We should catch up over dinner soon.", ja:"それでもすごいよ。近いうちにご飯でも行こうよ。" },
+          { s:"m", en:"Definitely. Are you free next Friday?", ja:"ぜひ。来週の金曜は空いてる？" },
+          { s:"p", en:"Friday works for me. I'll text you the details.", ja:"金曜大丈夫だよ。詳細はメッセージするね。" },
+          { s:"m", en:"Sounds good. Talk to you later!", ja:"了解。またね！" },
+        ]
+      },
+    ]
+  },
+  {
+    id: "work", emoji: "💼", name: "職場でのやり取り",
+    desc: "上司・同僚との会話",
+    scenes: [
+      {
+        id: "progress", name: "進捗を聞かれて答える",
+        turns: [
+          { s:"p", en:"Do you have a minute? I wanted to check on the report.", ja:"ちょっといい？レポートの進み具合を確認したくて。" },
+          { s:"m", en:"Sure. I've finished about seventy percent of it.", ja:"はい。7割くらい終わっています。" },
+          { s:"p", en:"Good. Do you think you can finish it by Friday?", ja:"いいね。金曜までに終わりそう？" },
+          { s:"m", en:"I think so, but I'm still waiting for the sales data.", ja:"終わると思いますが、まだ売上データ待ちです。" },
+          { s:"p", en:"Who are you waiting on?", ja:"誰からのデータ待ちなの？" },
+          { s:"m", en:"The sales team. I asked them on Monday, but I haven't heard back.", ja:"営業チームです。月曜に依頼したんですが、まだ返事がなくて。" },
+          { s:"p", en:"I'll follow up with them after this meeting.", ja:"この会議の後、私からも催促しておくよ。" },
+          { s:"m", en:"Thank you. That would really help.", ja:"ありがとうございます。助かります。" },
+          { s:"p", en:"Anything else you need from me?", ja:"他に私にできることはある？" },
+          { s:"m", en:"Could you review the first half when you have time?", ja:"お時間あるときに前半をレビューしてもらえますか？" },
+          { s:"p", en:"Of course. Send it to me by the end of the day.", ja:"もちろん。今日中に送っておいて。" },
+          { s:"m", en:"Will do. I'll send it this afternoon.", ja:"承知しました。今日の午後に送ります。" },
+        ]
+      },
+      {
+        id: "meeting", name: "会議の日程を調整する",
+        turns: [
+          { s:"p", en:"We need to set up a meeting about the new project. When works for you?", ja:"新しいプロジェクトの打ち合わせを設定したいんだけど、いつが都合いい？" },
+          { s:"m", en:"Let me check my calendar. How about Wednesday afternoon?", ja:"予定を確認しますね。水曜の午後はどうですか？" },
+          { s:"p", en:"I have another meeting until three. Is four o'clock okay?", ja:"3時まで別の会議があるんだ。4時なら大丈夫？" },
+          { s:"m", en:"Four works for me. How long do you think it will take?", ja:"4時で大丈夫です。どのくらいかかりそうですか？" },
+          { s:"p", en:"About an hour. Should we invite anyone else?", ja:"1時間くらいかな。他に誰か呼んだほうがいい？" },
+          { s:"m", en:"I think we should include Tanaka-san from the design team.", ja:"デザインチームの田中さんも入れたほうがいいと思います。" },
+          { s:"p", en:"Good idea. Could you send the invitation?", ja:"いいね。招待を送ってもらえる？" },
+          { s:"m", en:"Sure. Should I book a meeting room or make it online?", ja:"はい。会議室を取りますか、それともオンラインにしますか？" },
+          { s:"p", en:"Online is fine. Half of the team is working from home.", ja:"オンラインでいいよ。チームの半分は在宅勤務だから。" },
+          { s:"m", en:"Got it. I'll send the link right after this.", ja:"分かりました。この後すぐリンクを送ります。" },
+          { s:"p", en:"Thanks. Please share the agenda in advance too.", ja:"ありがとう。アジェンダも事前に共有しておいてね。" },
+          { s:"m", en:"Understood. I'll prepare it by tomorrow morning.", ja:"承知しました。明日の朝までに準備します。" },
+        ]
+      },
+    ]
+  },
+  {
+    id: "travel", emoji: "✈️", name: "旅行",
+    desc: "ホテル・移動・観光",
+    scenes: [
+      {
+        id: "hotel", name: "ホテルにチェックインする",
+        turns: [
+          { s:"p", en:"Good evening. Welcome to the Grand Hotel. Are you checking in?", ja:"こんばんは。グランドホテルへようこそ。チェックインでしょうか？" },
+          { s:"m", en:"Yes. I have a reservation under Sawai.", ja:"はい。サワイで予約しています。" },
+          { s:"p", en:"Let me see... Yes, a double room for three nights, is that correct?", ja:"お調べします…はい、ダブルルームで3泊ですね？" },
+          { s:"m", en:"That's right. Is it possible to get a room on a higher floor?", ja:"その通りです。高層階の部屋にしてもらうことはできますか？" },
+          { s:"p", en:"Let me check... Yes, we have one available on the twelfth floor.", ja:"確認しますね…はい、12階に空きがございます。" },
+          { s:"m", en:"That would be great. Also, what time is breakfast?", ja:"それでお願いします。あと、朝食は何時からですか？" },
+          { s:"p", en:"Breakfast is from six thirty to ten, on the second floor.", ja:"朝食は6時半から10時まで、2階でございます。" },
+          { s:"m", en:"Thank you. Is there Wi-Fi in the room?", ja:"ありがとうございます。部屋にWi-Fiはありますか？" },
+          { s:"p", en:"Yes, it's free. The password is on your key card holder.", ja:"はい、無料です。パスワードはカードキーのホルダーに記載されています。" },
+          { s:"m", en:"Perfect. One more thing—can I get a late checkout?", ja:"助かります。もう一つ、レイトチェックアウトはできますか？" },
+          { s:"p", en:"We can extend it to noon for no extra charge.", ja:"追加料金なしで12時まで延長できますよ。" },
+          { s:"m", en:"That's great. Thank you so much.", ja:"それはありがたいです。ありがとうございます。" },
+        ]
+      },
+      {
+        id: "directions", name: "道を尋ねる",
+        turns: [
+          { s:"p", en:"You look a little lost. Can I help you?", ja:"道に迷っているようですね。お手伝いしましょうか？" },
+          { s:"m", en:"Yes, please. I'm trying to get to the city museum.", ja:"はい、お願いします。市立博物館に行きたいんです。" },
+          { s:"p", en:"The museum? It's about a fifteen-minute walk from here.", ja:"博物館ですか？ここから歩いて15分くらいですよ。" },
+          { s:"m", en:"Is it easy to find? I don't have much battery left on my phone.", ja:"見つけやすいですか？携帯の充電があまり残っていなくて。" },
+          { s:"p", en:"It's simple. Go straight down this street until you see a big park.", ja:"簡単ですよ。大きな公園が見えるまでこの道をまっすぐ進んでください。" },
+          { s:"m", en:"Straight until the park. Then what?", ja:"公園までまっすぐですね。その後は？" },
+          { s:"p", en:"Turn left at the park, and the museum is on your right.", ja:"公園を左に曲がると、右手に博物館があります。" },
+          { s:"m", en:"Left at the park, and it's on the right. Got it.", ja:"公園を左で、右手にあるんですね。分かりました。" },
+          { s:"p", en:"You can't miss it. It's a big white building.", ja:"すぐ分かりますよ。大きな白い建物ですから。" },
+          { s:"m", en:"Thank you so much. Oh, is there a convenience store on the way?", ja:"本当にありがとうございます。あ、途中にコンビニはありますか？" },
+          { s:"p", en:"Yes, there's one right before the park, on the corner.", ja:"はい、公園の手前の角に一軒ありますよ。" },
+          { s:"m", en:"Perfect. Thanks again for your help!", ja:"完璧です。助けていただいてありがとうございました！" },
+        ]
+      },
+    ]
+  },
+];
+
+// ============================================================
+// アプリ本体
+// ============================================================
+const $ = (id) => document.getElementById(id);
+const main = $("main");
+const crumb = $("crumb");
+const backBtn = $("backBtn");
+const panel = $("panel");
+
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem("eikaiwa_" + k)) ?? d; } catch { return d; } },
+  set(k, v) {
+    // 埋め込み表示などで保存が禁止されている場合があるので、失敗しても止めない
+    try { localStorage.setItem("eikaiwa_" + k, JSON.stringify(v)); } catch {}
+  },
+};
+
+let view = { page: "home" };          // home | scenes | dialogue
+let practice = null;                   // 練習中の状態
+let settings = store.get("settings", { mode: "show", mic: true, rate: 0.95 });
+
+// ============================================================
+// 単語・熟語のホバー辞書（辞書データは dictionary.js）
+// ============================================================
+const dictReady = (typeof WORDS === "object" && typeof PHRASES === "object");
+
+// 熟語を照合するときだけ使う活用そろえ（looking for → look for と当てるため）
+const PH_LEMMA = {
+  "looking":"look","looked":"look","looks":"look",
+  "going":"go","goes":"go","went":"go",
+  "came":"come","comes":"come","coming":"come",
+  "got":"get","gets":"get","getting":"get",
+  "made":"make","makes":"make","making":"make",
+  "trying":"try","tried":"try","tries":"try",
+  "waiting":"wait","waited":"wait","waits":"wait",
+  "checking":"check","checked":"check","checks":"check",
+  "changed":"change","changing":"change","changes":"change",
+  "heard":"hear","hears":"hear","hearing":"hear",
+  "asked":"ask","asks":"ask","asking":"ask",
+  "depends":"depend","depended":"depend","depending":"depend",
+  "turned":"turn","turning":"turn","turns":"turn",
+  "grabbed":"grab","grabs":"grab","grabbing":"grab",
+  "caught":"catch","catches":"catch","catching":"catch",
+  "extended":"extend","extends":"extend",
+  "followed":"follow","follows":"follow","following":"follow",
+  "fits":"fit","fitted":"fit","fitting":"fit",
+  "took":"take","takes":"take","taking":"take",
+  "sent":"send","sends":"send","sending":"send",
+  "wore":"wear","wears":"wear","wearing":"wear",
+  "moved":"move","moves":"move"
+};
+
+const PHRASE_LIST = dictReady
+  ? Object.keys(PHRASES).map(k => k.split(" ").length)
+  : [];
+const MAX_PHRASE_LEN = PHRASE_LIST.length ? Math.max.apply(null, PHRASE_LIST) : 0;
+const PHRASE_SET = new Set(dictReady ? Object.keys(PHRASES) : []);
+
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+                  .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function norm(w) { return w.toLowerCase().replace(/’/g, "'"); }
+function phLemma(w) { return PH_LEMMA[w] || w; }
+
+// 単語を引く（活用形からも原形にたどる）
+function lookupWord(w) {
+  if (!dictReady) return null;
+  const k = norm(w);
+  if (WORDS[k]) return { key: k, e: WORDS[k] };
+  const m = (typeof LEMMA_MAP === "object") ? LEMMA_MAP[k] : null;
+  if (m && WORDS[m]) return { key: m, e: WORDS[m] };
+  const cands = [];
+  if (/ies$/.test(k)) cands.push(k.slice(0, -3) + "y");
+  if (/(es|ed)$/.test(k)) cands.push(k.slice(0, -2), k.slice(0, -1));
+  if (/s$/.test(k)) cands.push(k.slice(0, -1));
+  if (/ing$/.test(k)) cands.push(k.slice(0, -3), k.slice(0, -3) + "e");
+  const dbl = k.match(/^(.*?)([a-z])\2(ed|ing)$/);
+  if (dbl) cands.push(dbl[1] + dbl[2]);
+  for (const c of cands) if (WORDS[c]) return { key: c, e: WORDS[c] };
+  return null;
+}
+
+// 英文を、単語・熟語ごとにホバーできる span 付きHTMLに変換する
+const WORD_RE = /[A-Za-z]+(?:['’-][A-Za-z]+)*/g;
+function markup(text) {
+  if (!dictReady) return esc(text);
+  const toks = [];
+  let m;
+  WORD_RE.lastIndex = 0;
+  while ((m = WORD_RE.exec(text)) !== null) toks.push({ w: m[0], s: m.index, e: m.index + m[0].length });
+
+  let out = "", pos = 0, i = 0;
+  while (i < toks.length) {
+    out += esc(text.slice(pos, toks[i].s));
+    // 熟語は長いものから優先して照合する
+    let hit = null;
+    for (let n = Math.min(MAX_PHRASE_LEN, toks.length - i); n >= 2; n--) {
+      const seg = toks.slice(i, i + n).map(t => norm(t.w));
+      const raw = seg.join(" ");
+      const lem = seg.map(phLemma).join(" ");
+      const key = PHRASE_SET.has(raw) ? raw : (PHRASE_SET.has(lem) ? lem : null);
+      if (key) { hit = { key: key, n: n }; break; }
+    }
+    if (hit) {
+      const last = toks[i + hit.n - 1];
+      out += `<span class="w ph" data-t="p" data-k="${esc(hit.key)}">${esc(text.slice(toks[i].s, last.e))}</span>`;
+      pos = last.e; i += hit.n; continue;
+    }
+    const t = toks[i];
+    const found = lookupWord(t.w);
+    out += found
+      ? `<span class="w has" data-t="w" data-k="${esc(found.key)}">${esc(t.w)}</span>`
+      : `<span class="w">${esc(t.w)}</span>`;
+    pos = t.e; i++;
+  }
+  return out + esc(text.slice(pos));
+}
+
+// ---- 吹き出し ----
+const tip = $("tip");
+let tipShowTimer = null, tipHideTimer = null, tipOverTip = false, tipAnchor = null;
+
+function tipData(type, key) {
+  if (!dictReady) return null;
+  if (type === "p") {
+    const e = PHRASES[key];
+    return e ? { term: key, tag: "熟語", cls: "", e: e, sub: key.split(" ") } : null;
+  }
+  const e = WORDS[key];
+  return e ? { term: key, tag: "単語", cls: "word", e: e, sub: null } : null;
+}
+
+function renderTip(type, key, backTo) {
+  const d = tipData(type, key);
+  if (!d) {
+    tip.innerHTML = `<div class="tip-none">この語は辞書に登録されていません</div>`;
+    return;
+  }
+  const mean = d.e[0], ex = d.e[1], exja = d.e[2];
+  const chips = [];
+  if (TOUCH) chips.push(`<button class="tip-chip" data-close="1">✕ 閉じる</button>`);
+  if (backTo) chips.push(`<button class="tip-chip" data-back="${esc(backTo)}">← ${esc(backTo)}</button>`);
+  if (d.sub) d.sub.forEach(w => {
+    const f = lookupWord(w);
+    if (f) chips.push(`<button class="tip-chip" data-word="${esc(f.key)}" data-from="${esc(key)}">${esc(w)}</button>`);
+  });
+  tip.innerHTML = `
+    <div class="tip-head">
+      <span class="tip-term">${esc(d.term)}</span>
+      <span class="tip-tag ${d.cls}">${d.tag}</span>
+      <button class="tip-say" data-say="${esc(d.term)}">🔊</button>
+    </div>
+    <div class="tip-mean">${esc(mean)}</div>
+    <div class="tip-ex" data-say="${esc(ex)}" title="クリックで読み上げ">
+      <div class="en">${esc(ex)}</div><div class="ja">${esc(exja)}</div>
+    </div>
+    ${chips.length ? `<div class="tip-chips">${chips.join("")}</div>` : ""}`;
+}
+
+// スマホ・タブレットはマウスを乗せる操作が無いので、タップで意味を出す
+const TOUCH = window.matchMedia("(hover: none)").matches;
+const isNarrow = () => window.innerWidth <= 720;
+
+function placeTip(rect) {
+  tip.classList.add("show");
+  if (isNarrow()) {                 // 画面上部に固定して出す
+    tip.classList.add("sheet");
+    tip.style.left = "";
+    tip.style.top = "";
+    return;
+  }
+  tip.classList.remove("sheet");
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = rect.left, top = rect.bottom + 8;
+  if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+  if (left < 10) left = 10;
+  if (top + th > window.innerHeight - 10) top = rect.top - th - 8;
+  if (top < 6) top = 6;
+  tip.style.left = left + "px";
+  tip.style.top = top + "px";
+}
+
+function hideTip() { tip.classList.remove("show"); tipAnchor = null; }
+
+document.addEventListener("mouseover", (ev) => {
+  if (TOUCH) return;                        // タッチ端末では下の click で扱う
+  const el = ev.target.closest && ev.target.closest(".w[data-k]");
+  if (!el) return;
+  if (el.closest(".hidden-text")) return;   // 英文を隠している間は答えを見せない
+  clearTimeout(tipHideTimer); clearTimeout(tipShowTimer);
+  tipShowTimer = setTimeout(() => {
+    tipAnchor = el;
+    renderTip(el.dataset.t, el.dataset.k, null);
+    placeTip(el.getBoundingClientRect());
+  }, 180);
+});
+document.addEventListener("mouseout", (ev) => {
+  if (TOUCH) return;
+  const el = ev.target.closest && ev.target.closest(".w[data-k]");
+  if (!el) return;
+  clearTimeout(tipShowTimer);
+  tipHideTimer = setTimeout(() => { if (!tipOverTip) hideTip(); }, 260);
+});
+
+// タッチ端末：単語をタップしたら意味を出す（文の読み上げには進ませない）
+document.addEventListener("click", (ev) => {
+  if (!TOUCH) return;
+  const el = ev.target.closest && ev.target.closest(".w[data-k]");
+  if (el) {
+    if (el.closest(".hidden-text")) return;   // 伏せている間は答えを見せない
+    ev.stopPropagation();
+    ev.preventDefault();
+    tipAnchor = el;
+    renderTip(el.dataset.t, el.dataset.k, null);
+    placeTip(el.getBoundingClientRect());
+    return;
+  }
+  if (!ev.target.closest("#tip")) hideTip();   // 吹き出しの外をタップしたら閉じる
+}, true);
+tip.addEventListener("mouseenter", () => { tipOverTip = true; clearTimeout(tipHideTimer); });
+tip.addEventListener("mouseleave", () => { tipOverTip = false; hideTip(); });
+tip.addEventListener("click", (ev) => {
+  if (ev.target.closest("[data-close]")) { hideTip(); return; }
+  const say = ev.target.closest("[data-say]");
+  if (say) { speak(say.dataset.say); return; }
+  const wc = ev.target.closest("[data-word]");
+  if (wc) {
+    renderTip("w", wc.dataset.word, wc.dataset.from);
+    if (tipAnchor) placeTip(tipAnchor.getBoundingClientRect());
+    return;
+  }
+  const bk = ev.target.closest("[data-back]");
+  if (bk) {
+    renderTip("p", bk.dataset.back, null);
+    if (tipAnchor) placeTip(tipAnchor.getBoundingClientRect());
+  }
+});
+window.addEventListener("scroll", hideTip, true);
+window.addEventListener("resize", hideTip);
+window.addEventListener("orientationchange", hideTip);
+
+// ---- 音声合成（TTS） ----
+let enVoice = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
+  enVoice =
+    vs.find(v => /Natural|Online/.test(v.name) && v.lang === "en-US") ||
+    vs.find(v => v.lang === "en-US") || vs[0] || null;
+}
+speechSynthesis.onvoiceschanged = pickVoice;
+pickVoice();
+
+let ttsUnlocked = false;    // iOS 対策（下の unlockTTS を参照）
+
+// iOS Safari は利用者の操作を伴わない読み上げを拒む。最初のタップの中で
+// 音量0の読み上げを1回通しておくと、以降タイマーからの読み上げも通るようになる。
+function unlockTTS() {
+  if (ttsUnlocked) return;
+  ttsUnlocked = true;
+  try {
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  } catch {}
+}
+
+let ttsToken = 0;        // 読み上げの世代番号。cancel() で消えた古い読み上げの通知を無視するため
+let partnerPending = null;  // 相手のセリフを読み上げ中のターン番号（割り込まれたら読み直す）
+
+function speak(text, onend) {
+  const token = ++ttsToken;
+  // 相手が話している最中に別の音声（辞書の例文など）を鳴らすと、相手のセリフが
+  // 途中で切れてしまう。その場合は割り込みが終わってから最初から読み直す。
+  const interrupted = partnerPending;
+  // 自分のターン中に読み上げると、スピーカーから出た音を自分の発話として拾ってしまう。
+  // 読み上げの間だけ聞き取りを止め、終わったら再開する。
+  const resume = micWanted;
+  ttsBusy = true;
+  pauseListening();
+  if (resume) setMicState("tts");
+
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-US";
+  if (enVoice) u.voice = enVoice;
+  u.rate = settings.rate;
+
+  const finish = () => {
+    if (token !== ttsToken) return;   // 既に別の読み上げに切り替わっている
+    ttsBusy = false;
+    if (onend) onend();
+    if (resume && micWanted) setTimeout(startListening, 250);
+    if (interrupted !== null && practice && practice.idx === interrupted) {
+      setTimeout(playTurn, 300);      // 割り込みで切れた相手のセリフを読み直す
+    }
+  };
+  u.onend = finish;
+  u.onerror = finish;
+  speechSynthesis.speak(u);
+  return u;
+}
+
+// ---- 音声認識 ----
+// 【重要】SpeechRecognition は無言が数秒続くと自分で終了する（continuous でも起きる）。
+// 終了したまま放置すると「自分のターンで少し待つ／単語の意味を調べる」だけで
+// マイクが黙って死ぬため、聞き取りたい状態が続く限り自動で張り直す。
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+function micAvailable() { return !!SR; }
+
+const IDLE_MIC_MS = 10 * 60 * 1000;   // これ以上無言が続いたら聞き取りを止める
+let recog = null;        // 現在の認識インスタンス
+let micWanted = false;   // いま聞き取っていたい状態か（自分のターン中）
+let micTurn = null;      // 聞き取り対象のターン
+let ttsBusy = false;     // 読み上げ中か
+let micSince = 0;        // 聞き取りを始めた時刻
+let micFails = 0;        // 聞き取りを始められなかった回数（原因の表示に使う）
+
+// マイクが使えないと分かったら、理由と代わりの進め方を必ず画面に出す。
+// （Safari や埋め込み表示では「対応はしているが許可されない」ことがあり、
+//   黙って止まると理由が分からないため）
+function micUnusable(reason) {
+  micWanted = false;
+  micTurn = null;
+  pauseListening();
+  setMicState("");
+  setStatus(`<span class="mic-on">⚠ この環境ではマイク判定が使えません（${esc(reason)}）。</span><br>
+    英文を声に出して読んでから「言えた → 次へ」を押す形で練習してください。
+    マイク判定を使いたい場合は、PCで開いてください。`);
+  setBtns({ replay: true, answer: true, reveal: settings.mode === "hide", retry: true, next: true });
+}
+
+function setMicState(kind) {
+  const el = $("micState");
+  if (!el) return;
+  if (kind === "listening")   el.innerHTML = `<span class="mic-live">🎤 聞き取り中</span>`;
+  else if (kind === "tts")    el.innerHTML = `<span class="mic-idle">⏸ 読み上げ中は聞き取りを止めています</span>`;
+  else if (kind === "paused") el.innerHTML = `<span class="mic-idle">⏸ 聞き取りを止めました（「🎤 もう一度話す」で再開できます）</span>`;
+  else el.innerHTML = "";
+}
+
+// 聞き取りを始める／張り直す
+function startListening() {
+  if (!micWanted || ttsBusy || !micAvailable()) return;
+  if (Date.now() - micSince > IDLE_MIC_MS) {   // 長時間無言なら止める
+    micWanted = false;
+    setMicState("paused");
+    setBtns({ replay: true, answer: true, reveal: settings.mode === "hide", retry: true, next: true });
+    return;
+  }
+  if (recog) { const old = recog; recog = null; try { old.abort(); } catch {} }
+
+  const t = micTurn;
+  const r = new SR();
+  r.lang = "en-US";
+  r.continuous = true;        // 途中で切れにくくする（それでも切れるので onend で張り直す）
+  r.interimResults = false;
+  r.maxAlternatives = 1;
+
+  r.onresult = (e) => {
+    if (recog !== r || !practice) return;
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        const said = (e.results[i][0].transcript || "").trim();
+        if (said) { micFails = 0; showFeedback(said, t); return; }
+      }
+    }
+  };
+
+  r.onerror = (e) => {
+    if (recog !== r) return;
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      micUnusable("マイクの使用が許可されていません");
+    } else if (e.error === "audio-capture") {
+      micUnusable("マイクが見つかりません");
+    } else if (e.error !== "no-speech" && e.error !== "aborted") {
+      // network など。1回目は張り直して様子を見て、続いたら理由を出す
+      micFails++;
+      if (micFails >= 3) micUnusable("音声認識のエラー：" + e.error);
+    }
+    // no-speech / aborted は下の onend で張り直す
+  };
+
+  r.onend = () => {
+    if (recog !== r) return;   // 自分で止めた分は張り直さない（読み上げ後などは別経路で再開する）
+    recog = null;
+    if (!micWanted || ttsBusy || !practice) return;
+    setTimeout(startListening, 250);
+  };
+
+  recog = r;
+  try {
+    r.start();
+    setMicState("listening");
+  } catch (err) {
+    recog = null;
+    micFails++;
+    if (micFails >= 2) micUnusable("マイクの開始が拒否されました");
+  }
+}
+
+// 読み上げの間だけ止める（自分のターンであることは保つ）
+function pauseListening() {
+  if (recog) { const old = recog; recog = null; try { old.abort(); } catch {} }
+}
+
+// ターンを終える・練習を止めるときに完全に止める
+function stopListening() {
+  micWanted = false;
+  micTurn = null;
+  pauseListening();
+  setMicState("");
+}
+
+// ---- 画面描画 ----
+function render() {
+  speechSynthesis.cancel();
+  hideTip();
+  if (view.page === "home") renderHome();
+  else if (view.page === "scenes") renderScenes();
+  else renderDialogue();
+}
+
+function renderHome() {
+  backBtn.style.display = "none";
+  crumb.textContent = "カテゴリを選んでください";
+  panel.classList.remove("show");
+  const counts = store.get("counts", {});
+  // file:// で開くとブラウザがマイクの許可を保存できず、開くたびに聞かれる
+  const fileNote = (location.protocol === "file:") ? `
+    <div class="note">
+      <b>マイクの許可が毎回聞かれる状態です。</b>
+      このファイルを直接開くと（file://）、ブラウザは許可を保存できません。<br>
+      同じフォルダの <b>「英会話練習を開く」</b>（ショートカット）から開き直すと
+      <b>http://localhost:8765</b> で表示され、最初に一度
+      「サイトへのアクセス時は許可」を選ぶだけで以降は聞かれなくなります。
+    </div>` : "";
+  main.innerHTML = fileNote + `<div class="grid">` + DATA.map(c => `
+    <div class="tile" onclick="openCategory('${c.id}')">
+      <div class="emoji">${c.emoji}</div>
+      <div class="name">${c.name}</div>
+      <div class="desc">${c.desc}</div>
+      <div class="meta">${c.scenes.length} シーン ・ 練習 ${c.scenes.reduce((a,s)=>a+(counts[c.id+"/"+s.id]||0),0)} 回</div>
+    </div>`).join("") + `</div>`;
+}
+
+function renderScenes() {
+  const cat = DATA.find(c => c.id === view.cat);
+  backBtn.style.display = "";
+  crumb.textContent = cat.emoji + " " + cat.name;
+  panel.classList.remove("show");
+  const counts = store.get("counts", {});
+  main.innerHTML = `<div class="grid">` + cat.scenes.map(s => {
+    const n = counts[cat.id + "/" + s.id] || 0;
+    return `
+    <div class="tile" onclick="openScene('${s.id}')">
+      <div class="name">${s.name}</div>
+      <div class="desc">${s.turns.length} 往復のやり取り</div>
+      <div class="meta">${n > 0 ? `<span class="done-badge">✔ ${n} 回練習済み</span>` : "未練習"}</div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+
+function renderDialogue() {
+  const cat = DATA.find(c => c.id === view.cat);
+  const scene = cat.scenes.find(s => s.id === view.scene);
+  backBtn.style.display = "";
+  crumb.textContent = `${cat.emoji} ${cat.name} ＞ ${scene.name}`;
+
+  const micNote = micAvailable() ? "" :
+    `<div class="note"><b>このブラウザは音声認識に対応していないため、マイク判定は使えません。</b>
+      iPhone の Chrome は非対応です（iOS の制約）。iPhone では Safari、PCでは Edge / Chrome なら使えます。<br>
+      このままでも、英文を声に出して読んでから「言えた → 次へ」を押す形で練習できます。</div>`;
+  const dictNote = dictReady ? "" :
+    `<div class="note">辞書ファイル（dictionary.js）が読み込めていないため、単語の意味は表示されません。index.html と同じフォルダに dictionary.js を置いてください。</div>`;
+
+  main.innerHTML = `
+    ${micNote}${dictNote}
+    <div class="toolbar">
+      <button class="btn btn-primary" id="btnStart">▶ 会話を開始</button>
+      <label>自分のセリフ：
+        <select id="selMode">
+          <option value="show" ${settings.mode==="show"?"selected":""}>英文を見て読む</option>
+          <option value="hide" ${settings.mode==="hide"?"selected":""}>日本語から思い出す（英文を隠す）</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="chkMic" ${settings.mic && micAvailable() ? "checked":""} ${micAvailable()?"":"disabled"}> マイクで判定する</label>
+      <label>話す速さ <input type="range" id="rngRate" min="0.6" max="1.2" step="0.05" value="${settings.rate}"> <span id="rateVal">${settings.rate}</span></label>
+    </div>
+    <div class="colhead">
+      <div>${TOUCH
+        ? `英語（単語をタップ＝意味／文の余白をタップ＝読み上げ・<span style="color:#7c3aed">紫＝熟語</span>）`
+        : `英語（クリックで読み上げ・<span style="color:#7c3aed">紫の下線＝熟語</span>／点線＝単語 にマウスを当てると意味）`}</div>
+      <div>日本語訳</div>
+    </div>
+    <div id="turns">` +
+    scene.turns.map((t, i) => {
+      const who = t.s === "p" ? "相手" : "あなた";
+      const hide = t.s === "m" && settings.mode === "hide";
+      return `
+      <div class="turn ${t.s === "p" ? "partner" : "me"}" id="turn${i}">
+        <div class="cell en" onclick="cellClick(${i})">
+          <span class="speaker">${who}</span>
+          <span class="en-text ${hide ? "hidden-text" : ""}" id="en${i}">${markup(t.en)}</span>
+          ${hide ? `<span class="revealTag">（クリックで表示）</span>` : ""}
+        </div>
+        <div class="cell ja"><span class="speaker">&nbsp;</span>${t.ja}</div>
+      </div>`;
+    }).join("") + `</div><div style="height:120px"></div>`;
+
+  $("btnStart").onclick = startPractice;
+  $("selMode").onchange = (e) => { settings.mode = e.target.value; saveSettings(); render(); };
+  $("chkMic").onchange = (e) => {
+    settings.mic = e.target.checked;
+    saveSettings();
+    // 練習中に切り替えたら、その場で聞き取りを止める／始める
+    if (!settings.mic) {
+      stopListening();
+    } else if (practice) {
+      const t = currentScene().turns[practice.idx];
+      if (t && t.s === "m") beginMyTurn(t);
+    }
+  };
+  $("rngRate").oninput = (e) => { settings.rate = +e.target.value; $("rateVal").textContent = e.target.value; saveSettings(); };
+}
+
+function saveSettings() { store.set("settings", settings); }
+
+// ---- 画面遷移 ----
+window.openCategory = (id) => { view = { page: "scenes", cat: id }; render(); };
+window.openScene = (id) => { view = { page: "dialogue", cat: view.cat, scene: id }; render(); };
+backBtn.onclick = () => {
+  stopPractice(false);
+  if (view.page === "dialogue") view = { page: "scenes", cat: view.cat };
+  else view = { page: "home" };
+  render();
+};
+
+window.cellClick = (i) => {
+  unlockTTS();
+  const scene = currentScene();
+  const t = scene.turns[i];
+  const el = $("en" + i);
+  if (el.classList.contains("hidden-text")) { el.classList.remove("hidden-text"); return; }
+  if (!practice) speak(t.en);
+};
+
+function currentScene() {
+  return DATA.find(c => c.id === view.cat).scenes.find(s => s.id === view.scene);
+}
+
+// ============================================================
+// 練習フロー
+// ============================================================
+function startPractice() {
+  unlockTTS();            // 「会話を開始」のタップの中で読み上げを解禁する（iOS 対策）
+  stopPractice(false);
+  hideTip();
+  practice = { idx: 0, autoTimer: null };
+  panel.classList.add("show");
+  playTurn();
+}
+
+function stopPractice(finished) {
+  ttsToken++;            // 進行中の読み上げの通知を無効化する
+  speechSynthesis.cancel();
+  ttsBusy = false;
+  partnerPending = null;
+  stopListening();
+  if (practice && practice.autoTimer) clearTimeout(practice.autoTimer);
+  practice = null;
+  panel.classList.remove("show");
+  document.querySelectorAll(".turn.active").forEach(el => el.classList.remove("active"));
+  if (finished) {
+    const key = view.cat + "/" + view.scene;
+    const counts = store.get("counts", {});
+    counts[key] = (counts[key] || 0) + 1;
+    store.set("counts", counts);
+    render();
+    const done = document.createElement("div");
+    done.className = "note";
+    done.style.cssText = "background:#dcfce7;border-color:#86efac;color:#166534";
+    done.innerHTML = "🎉 会話を最後まで練習しました！";
+    main.prepend(done);
+    setTimeout(() => done.remove(), 6000);
+  }
+}
+
+function highlight(i) {
+  document.querySelectorAll(".turn.active").forEach(el => el.classList.remove("active"));
+  const el = $("turn" + i);
+  if (el) { el.classList.add("active"); el.scrollIntoView({ behavior: "smooth", block: "center" }); }
+}
+
+function playTurn() {
+  if (!practice) return;
+  const scene = currentScene();
+  if (practice.idx >= scene.turns.length) { stopPractice(true); return; }
+  const t = scene.turns[practice.idx];
+  highlight(practice.idx);
+  $("recognized").innerHTML = "";
+
+  if (t.s === "p") {
+    setStatus("🔊 相手が話しています…");
+    setBtns({ replay: false, answer: false, reveal: false, retry: false, next: false });
+    const myIdx = practice.idx;
+    partnerPending = null;          // この読み上げ自体を読み直し対象にしないため先に消す
+    speak(t.en, () => {
+      if (!practice || practice.idx !== myIdx) return;
+      partnerPending = null;        // 最後まで読めたので読み直しは不要
+      practice.autoTimer = setTimeout(() => { practice.idx++; playTurn(); }, 500);
+    });
+    partnerPending = myIdx;         // ここから先に割り込まれたら読み直す
+  } else {
+    beginMyTurn(t);
+  }
+}
+
+function beginMyTurn(t) {
+  partnerPending = null;
+  const hidden = settings.mode === "hide";
+  setBtns({ replay: true, answer: true, reveal: hidden, retry: true, next: true });
+  if (settings.mic && micAvailable()) {
+    setStatus(`<span class="mic-on">🗣 あなたの番です。英語で話してください（待っている間も、単語を調べている間も聞き取りは続きます）</span>`);
+    micWanted = true;
+    micTurn = t;
+    micSince = Date.now();
+    micFails = 0;
+    startListening();
+  } else {
+    stopListening();   // 判定オフのときに前のターンの聞き取りが残らないように止める
+    setStatus("🗣 あなたの番です。英文を声に出して読んだら「言えた → 次へ」を押してください");
+  }
+}
+
+function showFeedback(said, t) {
+  const model = tokenize(t.en);
+  const saidW = tokenize(said);
+  const saidSet = new Set(saidW);
+  const hit = model.filter(w => saidSet.has(w)).length;
+  const score = model.length ? Math.round(hit / model.length * 100) : 0;
+
+  // 認識結果を、模範文に含まれる単語=緑 / 含まれない=赤 で表示
+  const modelSet = new Set(model);
+  const colored = saidW.map(w => `<span class="${modelSet.has(w) ? "w-ok" : "w-ng"}">${w}</span>`).join(" ");
+  const badge = `<span id="scoreBadge" class="${score >= 70 ? "score-high" : "score-low"}">一致 ${score}%</span>`;
+  $("recognized").innerHTML = `あなた：「${colored}」 ${badge}`;
+
+  // 隠しモードなら答えを開示
+  const el = $("en" + practice.idx);
+  if (el) el.classList.remove("hidden-text");
+
+  if (score >= 70) {
+    stopListening();   // 直後に相手が話すので、その声を拾わないよう止める
+    setStatus("✅ よく言えています！自動で次に進みます…");
+    setBtns({ replay: false, answer: true, reveal: false, retry: true, next: true });
+    practice.autoTimer = setTimeout(() => { practice.idx++; playTurn(); }, 2200);
+  } else {
+    setStatus("🔁 模範文と少し違いました。答えを確認して、もう一度話すか次へ進んでください");
+    setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true });
+  }
+}
+
+function tokenize(s) {
+  return s.toLowerCase().replace(/[^a-z0-9' ]/g, " ").split(/\s+/).filter(Boolean);
+}
+
+function setStatus(html) { $("panelStatus").innerHTML = html; }
+function setBtns(v) {
+  $("btnReplay").style.display = v.replay ? "" : "none";
+  $("btnAnswerVoice").style.display = v.answer ? "" : "none";
+  $("btnReveal").style.display = v.reveal ? "" : "none";
+  $("btnRetry").style.display = v.retry ? "" : "none";
+  $("btnNext").style.display = v.next ? "" : "none";
+}
+
+// パネルのボタン
+$("btnReplay").onclick = () => {
+  const scene = currentScene();
+  const prev = scene.turns[practice.idx - 1];
+  if (prev && prev.s === "p") speak(prev.en);
+};
+$("btnAnswerVoice").onclick = () => {
+  const t = currentScene().turns[practice.idx];
+  const el = $("en" + practice.idx);
+  if (el) el.classList.remove("hidden-text");
+  speak(t.en);
+};
+$("btnReveal").onclick = () => {
+  const el = $("en" + practice.idx);
+  if (el) el.classList.remove("hidden-text");
+};
+$("btnRetry").onclick = () => {
+  if (practice.autoTimer) clearTimeout(practice.autoTimer);
+  const t = currentScene().turns[practice.idx];
+  $("recognized").innerHTML = "";
+  beginMyTurn(t);
+};
+$("btnNext").onclick = () => {
+  stopListening();
+  if (practice.autoTimer) clearTimeout(practice.autoTimer);
+  practice.idx++;
+  playTurn();
+};
+$("btnStop").onclick = () => stopPractice(false);
+
+render();
+</script>
+</body>
+</html>
