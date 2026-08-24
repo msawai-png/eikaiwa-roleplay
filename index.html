@@ -9781,45 +9781,41 @@ async function chatCall(mode, payload) {
   }
 }
 
-// 音声操作のAI（interpret / grade / ask）が使えるか。
-// 中継サーバー（PC経由）はフリー会話の用途しか受け付けないため、
-// そこへ interpret を投げると断られ、画面に警告が出続ける。
-// 中継サーバーを設定している間は「無効」とみなし、音声操作はルール方式のままにする。
-function aiReady() {
-  return !!(ai.url && ai.token) && !(chatRelayInfo && chatRelayInfo.relay);
-}
+// AI（音声操作の解釈 / 採点 / 質問）が使えるか。
+// フリー会話と同じ接続先（PC上の claude.exe）で答えるので、判定も同じでよい。
+function aiReady() { return chatReady(); }
 
 function setAiState(text) {
   const el = $("aiState");
   if (el) el.textContent = text || "";
 }
 
+// 接続先は chatCall が決める（PCで開いていれば同じ場所の /ai、
+// スマホ・家族なら中継サーバー）。ここでは二重呼び出しを防ぎ、
+// 待っていることを画面に出す役目だけを持つ。
 async function aiCall(mode, payload) {
   if (!aiReady() || aiBusy) return null;
   aiBusy = true;
-  setAiState("🤖 考えています…");
+  const t0 = Date.now();
+  const tick = () => setAiState("🤖 考えています…（" + Math.round((Date.now() - t0) / 1000) + "秒）");
+  tick();
+  const timer = setInterval(tick, 1000);
   try {
-    const r = await fetch(ai.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-App-Token": ai.token },
-      body: JSON.stringify({ mode, payload }),
-    });
-    let j = null;
-    try { j = await r.json(); } catch {}
-    if (!r.ok || !j || !j.ok) {
-      const msg = (j && j.error) || ("AIの呼び出しに失敗しました（" + r.status + "）");
-      setAiState("⚠ " + msg);
-      showAsHeard("⚠ " + msg);
-      return null;
-    }
-    setAiState("");
-    return j.result;
-  } catch (e) {
-    setAiState("⚠ AIに繋がりません（設定のURLを確認してください）");
-    return null;
+    const res = await chatCall(mode, payload);
+    if (res) setAiState("");
+    return res;
   } finally {
+    clearInterval(timer);
     aiBusy = false;
   }
+}
+
+// AI の準備（常駐の起動）を先に済ませておく。最初の1回で待たせないため。
+let aiWarmed = false;
+function aiWarm() {
+  if (aiWarmed || !aiReady()) return;
+  aiWarmed = true;
+  chatCall("warm", {});   // 返事は待たない
 }
 
 // 発話をAIに解釈させて操作する。候補はアプリ側で名前の近さで絞って渡す
@@ -9921,6 +9917,7 @@ function runAiAction(res) {
 async function aiAsk(question) {
   const t = curTurn();
   const pp = prevPartnerTurn();
+  showAsHeard("🤖 " + question);
   const res = await aiCall("ask", {
     question,
     model_en: t ? t.en : "",
@@ -9934,9 +9931,11 @@ async function aiAsk(question) {
 }
 
 // 発話の採点をAIに任せる（模範文と語が違っても通じていれば正解にする）
-async function aiGrade(said, t) {
+async function aiGrade(said, t, idx) {
   const res = await aiCall("grade", { said, model_en: t.en, model_ja: t.ja });
   if (!res) return false;
+  // 待っている間に次へ進んだ・練習をやめた場合は、届いた判定を捨てる
+  if (idx !== undefined && (!practice || practice.idx !== idx)) return true;
   const badge = `<span id="scoreBadge" class="${res.ok ? "score-high" : "score-low"}">AI判定 ${Math.round(res.score)}%</span>`;
   $("recognized").innerHTML = `あなた：「${esc(said)}」 ${badge}`;
   if (res.comment) showHint({ show: res.comment }, null);
@@ -11505,6 +11504,7 @@ function currentScene() {
 // ============================================================
 function startPractice() {
   unlockTTS();            // 「会話を開始」のタップの中で読み上げを解禁する（iOS 対策）
+  aiWarm();               // 採点や質問で待たせないよう、AI側の常駐を先に起こす
   stopPractice(false);
   hideTip();
   practice = { idx: 0, autoTimer: null };
@@ -11643,14 +11643,36 @@ function showFeedback(said, t) {
   // 語の一致だけでは「言えているのに不正解」になる場面があるため、
   // 一致率が高くないときは AI に意味で判定させる（設定してあるときだけ）
   if (aiReady() && score < 85) {
-    aiGrade(said, t).then(done => { if (!done) fallbackFeedback(score, t); });
+    // 先にルールの判定を出す。AIの返事は4〜50秒かかることがあり、
+    // 待たせると画面が止まったように見えるため。
+    // ただし自動で次へ進むのは止める（進んだ後に判定が届くと辻褄が合わない）。
+    fallbackFeedback(score, t, true);
+    const idx = practice.idx;
+    aiGrade(said, t, idx).then(done => {
+      if (done) return;
+      if (!practice || practice.idx !== idx) return;
+      // AIが答えられなかった場合。ルールの判定のまま進められるようにする
+      setStatus((score >= 70 ? "✅ 語はおおむね合っています。" : "🔁 模範文と少し違いました。")
+        + "<br>AIの判定は受け取れませんでした。もう一度話すか、次へ進んでください");
+    });
     return;
   }
   fallbackFeedback(score, t);
 }
 
-// AI を使わない場合の従来どおりの判定
-function fallbackFeedback(score, t) {
+// AI を使わない場合の従来どおりの判定。
+// waitingAi = true のときは、この後 AI の判定が届いて上書きされる。
+// その場合は**自動で次へ進まない**（進んだ後に判定が届くと辻褄が合わないため）。
+function fallbackFeedback(score, t, waitingAi) {
+  if (waitingAi) {
+    stopListening();
+    setStatus((score >= 70 ? "✅ 語はおおむね合っています。" : "🔁 模範文とは少し違います。")
+      + "<br><span class='free-wait'>🤖 AIが意味で見ています…</span>"
+      + "<br><span style='font-size:12px;color:var(--sub)'>"
+      + "待たずに「次へ」や「もう一度話す」を押しても構いません</span>");
+    setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true });
+    return;
+  }
   if (score >= 70) {
     stopListening();   // 直後に相手が話すので、その声を拾わないよう止める
     setStatus("✅ よく言えています！自動で次に進みます…");
