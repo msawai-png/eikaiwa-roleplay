@@ -330,6 +330,17 @@
     #panelBtns { gap: 6px; }
     #panelBtns .btn { flex: 1 1 46%; padding: 11px 8px; font-size: 13px; }
   }
+
+    /* フリー会話：話す代わりに書いて送る欄（マイクが使えない端末用・日本語の質問用） */
+    #freeInputRow { display: none; gap: 8px; margin-top: 8px; }
+    #freeInputRow.show { display: flex; }
+    #freeInputRow input {
+      flex: 1; min-width: 0; padding: 10px 12px; font-size: 14px;
+      border: 1px solid #cbd5e1; border-radius: 8px;
+    }
+    #freeInputRow .btn { flex: 0 0 auto; padding: 10px 16px; font-size: 13px; }
+    .free-wait { color: #7c3aed; font-weight: 700; }
+    .free-tip { color: var(--ng); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -359,6 +370,11 @@
       <button class="btn btn-ghost" id="btnRetry">🎤 もう一度話す</button>
       <button class="btn btn-primary" id="btnNext">言えた → 次へ ▶</button>
       <button class="btn btn-ghost" id="btnStop">■ 終了</button>
+    </div>
+    <div id="freeInputRow">
+      <input id="freeInput" autocomplete="off"
+             placeholder="書いて送る（日本語で質問してもOK：混雑してるって英語で？）">
+      <button class="btn btn-primary" id="freeSendBtn">送る</button>
     </div>
   </div>
 </div>
@@ -9567,6 +9583,12 @@ function micUnusable(reason) {
   micTurn = null;
   pauseListening();
   setMicState("");
+  if (freeChat) {
+    setStatus(`<span class="mic-on">⚠ この環境ではマイクが使えません（${esc(reason)}）。</span><br>
+      下の欄に英語を書いて送れば、そのまま会話を続けられます。`);
+    freeBtns(true);
+    return;
+  }
   setStatus(`<span class="mic-on">⚠ この環境ではマイク判定が使えません（${esc(reason)}）。</span><br>
     英文を声に出して読んでから「言えた → 次へ」を押す形で練習してください。
     マイク判定を使いたい場合は、PCで開いてください。`);
@@ -9589,7 +9611,13 @@ function startListening() {
   if (Date.now() - micSince > IDLE_MIC_MS) {   // 長時間無言なら止める
     micWanted = false;
     setMicState("paused");
-    setBtns({ replay: true, answer: true, reveal: settings.mode === "hide", retry: true, next: true });
+    if (freeChat) {
+      setStatus("⏸ しばらく声が無かったので聞き取りを止めました。"
+                + "「🎤 もう一度話す」か、下の欄に書いて送ってください。");
+      freeBtns(true);
+    } else {
+      setBtns({ replay: true, answer: true, reveal: settings.mode === "hide", retry: true, next: true });
+    }
     return;
   }
   asPause();   // 音声認識は同時に1つしか動かせないため、先にアシスタント側を止める
@@ -9603,12 +9631,14 @@ function startListening() {
   r.maxAlternatives = 1;
 
   r.onresult = (e) => {
-    if (recog !== r || !practice) return;
+    if (recog !== r || !(practice || freeChat)) return;
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) {
         const said = (e.results[i][0].transcript || "").trim();
         if (said) {
           micFails = 0;
+          // フリー会話は正解が無いので採点せず、そのまま相手へ渡す
+          if (freeChat) { freeSend(said); return; }
           // 音声操作がオンなら、発話をまずコマンドとして解釈する
           // （英語判定が動いている間はコマンドも英語で受ける。完全一致のみ）
           if (assistantOn && handleEnCommand(said, t)) return;
@@ -9636,7 +9666,7 @@ function startListening() {
   r.onend = () => {
     if (recog !== r) return;   // 自分で止めた分は張り直さない（読み上げ後などは別経路で再開する）
     recog = null;
-    if (!micWanted || ttsBusy || !practice) return;
+    if (!micWanted || ttsBusy || !(practice || freeChat)) return;
     setTimeout(startListening, 250);
   };
 
@@ -9675,7 +9705,89 @@ function stopListening() {
 let ai = store.get("ai", { url: "", token: "" });
 let aiBusy = false;
 
-function aiReady() { return !!(ai.url && ai.token); }
+// ---- フリー会話の接続先 ----
+// PC（起動ファイルから開いた場合）は同じ場所のサーバーが POST /ai を受けるので、
+// 設定なしで使える。スマホ・遠隔の家族は中継サーバーのURLと合言葉を設定して使う。
+// どちらも PC 上の ai_core.py が答えるため、応答の中身は同じになる。
+const IS_LOCALHOST = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+let chatLocal = false;        // このPCのサーバー（POST /ai）が使えるか
+let chatRelay = false;        // 中継サーバー経由でPCに届くか
+let chatRelayInfo = null;     // 中継サーバーの答え（PCが起動しているか等）
+
+function chatReady() { return chatLocal || chatRelay; }
+
+// 接続先を確かめる。押してから失敗させないため、ボタンを出す前に必ず通す。
+async function chatProbe() {
+  chatLocal = false;
+  chatRelay = false;
+  chatRelayInfo = null;
+
+  if (IS_LOCALHOST) {
+    try {
+      const r = await fetch("/ai", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "health", payload: {} }),
+      });
+      const j = await r.json();
+      chatLocal = !!(j && j.ok && j.result && j.result.ok);
+    } catch (e) { chatLocal = false; }
+    if (chatLocal) return true;
+  }
+
+  // スマホ・家族の端末はここ。中継サーバーは「PCが起動しているか」も返す。
+  if (ai.url && ai.token) {
+    try {
+      const r = await fetch(ai.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Token": ai.token },
+        body: JSON.stringify({ mode: "health", payload: {} }),
+      });
+      const j = await r.json();
+      chatRelayInfo = (j && j.result) || null;
+      chatRelay = !!(chatRelayInfo && chatRelayInfo.ok && chatRelayInfo.online);
+    } catch (e) { chatRelayInfo = null; }
+  }
+  return chatReady();
+}
+
+function chatStateLabel() {
+  if (chatLocal) return "有効（このPC）";
+  if (chatRelay) return "有効（PC経由）";
+  if (chatRelayInfo && chatRelayInfo.relay) return "PCが起動していません";
+  if (ai.url && ai.token) return "繋がりません";
+  return "未設定";
+}
+
+async function chatCall(mode, payload) {
+  const local = chatLocal;
+  const url = local ? "/ai" : ai.url;
+  if (!url) { setAiState("⚠ AIの接続先が設定されていません"); return null; }
+  const headers = { "Content-Type": "application/json" };
+  if (!local) headers["X-App-Token"] = ai.token;
+  try {
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify({ mode, payload }) });
+    let j = null;
+    try { j = await r.json(); } catch {}
+    if (!r.ok || !j || !j.ok) {
+      setAiState("⚠ " + ((j && j.error) || ("AIの呼び出しに失敗しました（" + r.status + "）")));
+      return null;
+    }
+    setAiState("");
+    return j.result;
+  } catch (e) {
+    setAiState(local ? "⚠ AIに繋がりません（起動ファイルから開き直してください）"
+                     : "⚠ AIに繋がりません（中継サーバーのURLと、PCが起動しているかを確認してください）");
+    return null;
+  }
+}
+
+// 音声操作のAI（interpret / grade / ask）が使えるか。
+// 中継サーバー（PC経由）はフリー会話の用途しか受け付けないため、
+// そこへ interpret を投げると断られ、画面に警告が出続ける。
+// 中継サーバーを設定している間は「無効」とみなし、音声操作はルール方式のままにする。
+function aiReady() {
+  return !!(ai.url && ai.token) && !(chatRelayInfo && chatRelayInfo.relay);
+}
 
 function setAiState(text) {
   const el = $("aiState");
@@ -9901,6 +10013,7 @@ function asMaybeListen() {
   if (!assistantOn || !micAvailable() || ttsBusy || asRecog) return;
   if (micWanted && !jaHelp) return;   // 英語判定中は動かさない（日本語ヘルプ中だけ例外）
   if (vocabWaitEn) return;            // 単語練習の答え待ち中も動かさない
+  if (freeChat) return;               // フリー会話中は英語の聞き取りを優先する
   if (Date.now() - asSince > IDLE_MIC_MS) {   // 長時間無音なら止める（開きっぱなし防止）
     setAssistant(false);
     showAsHeard("しばらく無音だったため音声操作を止めました");
@@ -9970,6 +10083,7 @@ function updateAsBar() {
   if (asChoices) hint = "番号でどうぞ（1／2／3）。「やめる」で取り消し";
   else if (jaHelp) hint = "日本語でどうぞ：「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「答え」／「戻る」で英語に復帰";
   else if (asPending) hint = "「はい」で実行、「いいえ」で取り消し";
+  else if (freeChat) hint = "フリー会話中は音声操作は使えません（英語の聞き取りを優先しています）";
   else if (practice && micWanted) hint = "困ったら「ヘルプ」と言えば日本語で聞けます（英語では help / hint / in Japanese / next / stop）";
   else if (practice) hint = "「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「わからない」「日本語で」「もう一度」「次へ」「終了」";
   else if (view.page === "vocab") hint = vocabWaitEn
@@ -11142,6 +11256,7 @@ function render() {
   if (view.page === "home") renderHome();
   else if (view.page === "scenes") renderScenes();
   else if (view.page === "vocab") renderVocab();
+  else if (view.page === "free") renderFree();
   else renderDialogue();
 }
 
@@ -11172,13 +11287,23 @@ function renderHome() {
     </div>`;
   const aiRow = `
     <div class="ai-row" id="aiRow">
-      <span class="dot ${aiReady() ? "on" : ""}"></span>
-      <span>AIアシスト：<b>${aiReady() ? "有効" : "未設定"}</b></span>
+      <span class="dot ${chatReady() ? "on" : ""}"></span>
+      <span>フリー会話の接続先：<b>${chatStateLabel()}</b></span>
       <span style="flex:1"></span>
-      <button id="aiCfgBtn">${aiReady() ? "設定を変える" : "設定する"}</button>
+      <button id="aiCfgBtn">${(ai.url && ai.token) ? "設定を変える" : "設定する"}</button>
       <div id="aiCfg" style="display:none;width:100%"></div>
     </div>`;
-  main.innerHTML = fileNote + vocabEntry + aiRow + `<div class="grid">` + DATA.map(c => `
+  // フリー会話は繋がる環境でだけ出す（押して失敗するのが一番よくないため）
+  const freeEntry = chatReady() ? `
+    <div class="vocab-top" onclick="openFree()" style="border-color:#c7d2fe;background:#eef2ff">
+      <span class="emoji">💬</span>
+      <div>
+        <div class="name">フリー会話（台本なし）</div>
+        <div class="desc">AIが相手。場面を選ぶと、こちらの英語に合わせて話題が続きます${
+          chatLocal ? "" : "（PC経由なので、1回目の返事に少し余分にかかります）"}</div>
+      </div>
+    </div>` : "";
+  main.innerHTML = fileNote + vocabEntry + freeEntry + aiRow + `<div class="grid">` + DATA.map(c => `
     <div class="tile" onclick="openCategory('${c.id}')">
       <div class="emoji">${c.emoji}</div>
       <div class="name">${c.name}</div>
@@ -11193,7 +11318,7 @@ function renderHome() {
     box.innerHTML = `
       <div class="ai-form">
         <label>中継サーバーのURL
-          <input id="aiUrl" type="url" placeholder="https://eikaiwa-ai.（自分の名前）.workers.dev" value="${esc(ai.url)}">
+          <input id="aiUrl" type="url" placeholder="https://eikaiwa-relay.（名前）.workers.dev" value="${esc(ai.url)}">
         </label>
         <label>合言葉（APP_TOKEN）
           <input id="aiTok" type="password" placeholder="サーバーに設定したものと同じ文字列" value="${esc(ai.token)}">
@@ -11204,22 +11329,33 @@ function renderHome() {
         </div>
         <div class="ai-note" id="aiMsg">
           この2つはこの端末にだけ保存されます（公開ファイルには入りません）。
-          設定手順は AI中継サーバー フォルダの「はじめかた.md」にあります。
+          答えを作るのは澤井さんのPCなので、<b>PCが起動している間だけ</b>使えます。
+          設定手順は「AI中継サーバー_PC経由」フォルダの「はじめかた.md」にあります。
         </div>
       </div>`;
     $("aiSave").onclick = async () => {
       ai = { url: $("aiUrl").value.trim(), token: $("aiTok").value.trim() };
       store.set("ai", ai);
       $("aiMsg").textContent = "接続を試しています…";
-      const r = await aiCall("interpret", {
-        utterance: "接続の確認", page: "home", category: "", scene: "", inPractice: false,
-        categories: DATA.map(c => ({ id: c.id, name: c.name })), candidates: [],
-      });
-      $("aiMsg").textContent = r ? "✅ 繋がりました。音声操作でAIが使えます。"
-                                : "⚠ 繋がりませんでした。URLと合言葉、サーバーの公開状態を確認してください。";
-      if (r) render();
+      await chatProbe();
+      // 「繋がらない」と「繋がったがPCが止まっている」は原因が別なので書き分ける
+      if (chatRelay) {
+        $("aiMsg").textContent = "✅ 繋がりました。フリー会話が使えます。";
+      } else if (chatRelayInfo && chatRelayInfo.relay) {
+        $("aiMsg").textContent = "⚠ 中継サーバーには繋がりましたが、PCが起動していません。"
+          + "PCの電源を入れて1分ほど待ってから、もう一度お試しください。";
+      } else {
+        $("aiMsg").textContent = "⚠ 繋がりませんでした。URLと合言葉、サーバーの公開状態を確認してください。";
+      }
+      render();
     };
-    $("aiClear").onclick = () => { ai = { url: "", token: "" }; store.set("ai", ai); render(); };
+    $("aiClear").onclick = () => {
+      ai = { url: "", token: "" };
+      store.set("ai", ai);
+      chatRelay = false;
+      chatRelayInfo = null;
+      render();
+    };
   };
 }
 
@@ -11344,6 +11480,7 @@ window.openCategory = (id) => { view = { page: "scenes", cat: id, q: "" }; rende
 // 絞り込みの入力（q）を持ち回す。落とすと「戻る」で絞り込みが消える
 window.openScene = (id) => { view = { page: "dialogue", cat: view.cat, scene: id, q: view.q }; render(); };
 backBtn.onclick = () => {
+  if (freeChat || view.page === "free") { freeEnd(true); return; }
   stopPractice(false);
   if (view.page === "dialogue") view = { page: "scenes", cat: view.cat, q: view.q };
   else view = { page: "home" };
@@ -11538,8 +11675,277 @@ function setBtns(v) {
   $("btnNext").style.display = v.next ? "" : "none";
 }
 
+
+// ============================================================
+// フリー会話（台本なし・AIが相手）
+//
+// 台本の練習と違い、正解が無いので採点はしない。相手の英語を読み上げ、
+// その下に日本語訳を並べる。英語には既存の辞書の印を付けるので、
+// 分からない語はタップ（PCならマウスを当てる）だけで意味が出る。
+//
+// 音声の仕組みは練習と同じものを使い回している（読み上げ中は聞き取りを止める、
+// 切れたら張り直す、という作り込みを二重に持たないため）。
+//
+// 返事は速い時で3秒、混み合っていると30秒を超えることがある（実測）。
+// 黙って待たせると壊れたように見えるので、経過秒を出しながら待つ。
+// ============================================================
+let freeChat = null;      // {conv, scene, role, level, label, log:[], busy}
+let freeWaitTimer = null;
+
+const FREE_SCENES = [
+  { emoji: "☕", name: "同僚と雑談", desc: "休憩中のひとこと。週末の話から始まります",
+    scene: "chatting during a short coffee break at the office",
+    role: "Alex, a friendly coworker from the US" },
+  { emoji: "💻", name: "海外の取引先と打ち合わせ", desc: "オンライン会議の冒頭から",
+    scene: "the opening small talk of an online business meeting, then the agenda",
+    role: "Chris, a client from a partner company overseas" },
+  { emoji: "🏨", name: "ホテルのチェックイン", desc: "出張先で部屋と朝食を確認する",
+    scene: "checking in at a hotel on a business trip",
+    role: "the hotel front desk clerk" },
+  { emoji: "🍽", name: "レストランで注文", desc: "おすすめを聞いて頼む",
+    scene: "ordering food at a restaurant abroad",
+    role: "a friendly waiter" },
+  { emoji: "🛂", name: "入国審査", desc: "渡航の目的や滞在先を聞かれる",
+    scene: "going through immigration at an airport",
+    role: "an immigration officer (polite but businesslike)" },
+  { emoji: "🗺", name: "道を尋ねる", desc: "駅までの行き方を聞く",
+    scene: "asking a stranger on the street for directions",
+    role: "a helpful passer-by" },
+  { emoji: "🤝", name: "はじめての自己紹介", desc: "初対面で仕事と趣味を話す",
+    scene: "meeting someone for the first time at a social event",
+    role: "someone you have just been introduced to" },
+  { emoji: "🎓", name: "英語の先生と自由に話す", desc: "話題は何でも。言えない言い方を聞ける",
+    scene: "a free conversation lesson where the learner can talk about anything",
+    role: "a patient English teacher" },
+];
+
+window.openFree = () => { view = { page: "free" }; render(); };
+window.freeStartPreset = (i) => {
+  const s = FREE_SCENES[i];
+  freeStart(s.scene, s.role, "normal", s.name);
+};
+window.freeSpeakLine = (i) => {
+  const m = freeChat && freeChat.log[i];
+  if (m) speak(m.en);
+};
+
+function freeLastPartner() {
+  if (!freeChat) return null;
+  for (let i = freeChat.log.length - 1; i >= 0; i--) {
+    if (freeChat.log[i].who === "partner") return freeChat.log[i];
+  }
+  return null;
+}
+
+function freeBtns(on) {
+  setBtns({ replay: on, answer: false, reveal: false, retry: on, next: false });
+}
+
+function renderFree() {
+  backBtn.style.display = "";
+  const row = $("freeInputRow");
+
+  if (!freeChat) {
+    crumb.textContent = "💬 フリー会話";
+    panel.classList.remove("show");
+    if (row) row.classList.remove("show");
+    main.innerHTML = `
+      <div class="note">
+        台本のない会話です。相手はAIで、こちらの英語に合わせて話題が続きます。
+        <b>返事は3〜10秒ほど、混み合っていると30秒かかることもあります。</b>
+        正解が無いので採点はしません。言い方が分からないときは
+        <b>日本語で聞けば教えてくれます</b>（「混雑してるって英語で？」）。
+      </div>
+      <div class="grid">` + FREE_SCENES.map((s, i) => `
+        <div class="tile" onclick="freeStartPreset(${i})">
+          <div class="emoji">${s.emoji}</div>
+          <div class="name">${s.name}</div>
+          <div class="desc">${s.desc}</div>
+        </div>`).join("") + `</div>
+      <div class="ai-row" style="margin-top:14px;display:block">
+        <div style="font-weight:700;margin-bottom:8px">自分で場面を決める</div>
+        <div class="ai-form">
+          <label>場面
+            <input id="fScene" placeholder="例：出張先のホテルで朝食の場所を聞く">
+          </label>
+          <label>相手
+            <input id="fRole" placeholder="例：ホテルのフロント係">
+          </label>
+          <label>相手の英語の速さ・むずかしさ
+            <select id="fLevel">
+              <option value="easy">やさしく（短い文・よく使う語だけ）</option>
+              <option value="normal" selected>ふつう</option>
+              <option value="hard">手加減なし（慣用句も出る）</option>
+            </select>
+          </label>
+          <div class="btns">
+            <button class="btn btn-primary" id="fGo"
+                    style="padding:8px 16px;font-size:13px">▶ この場面で始める</button>
+          </div>
+        </div>
+      </div>`;
+    $("fGo").onclick = () => {
+      const sc = $("fScene").value.trim();
+      const ro = $("fRole").value.trim();
+      if (!sc) { $("fScene").focus(); return; }
+      freeStart(sc, ro, $("fLevel").value, sc);
+    };
+    return;
+  }
+
+  crumb.textContent = "💬 " + (freeChat.label || "フリー会話");
+  main.innerHTML = `
+    <div class="colhead">
+      <div>${TOUCH
+        ? `英語（単語をタップ＝意味／文の余白をタップ＝読み上げ）`
+        : `英語（クリックで読み上げ・単語にマウスを当てると意味）`}</div>
+      <div>日本語訳</div>
+    </div>
+    <div id="freeLog"></div><div style="height:170px"></div>`;
+  renderFreeLog();
+  panel.classList.add("show");
+  if (row) row.classList.add("show");
+}
+
+function renderFreeLog() {
+  const box = $("freeLog");
+  if (!box || !freeChat) return;
+  box.innerHTML = freeChat.log.map((m, i) => {
+    if (m.who === "me") {
+      return `
+      <div class="turn me">
+        <div class="cell en"><span class="speaker">あなた</span>
+          <span class="en-text">${esc(m.en)}</span></div>
+        <div class="cell ja"><span class="speaker">&nbsp;</span>${
+          m.tip ? `<span class="free-tip">${esc(m.tip)}</span>` : ""}</div>
+      </div>`;
+    }
+    return `
+      <div class="turn partner">
+        <div class="cell en" onclick="freeSpeakLine(${i})"><span class="speaker">相手</span>
+          <span class="en-text">${markup(m.en)}</span></div>
+        <div class="cell ja"><span class="speaker">&nbsp;</span>${esc(m.ja || "")}</div>
+      </div>`;
+  }).join("");
+  const last = box.lastElementChild;
+  if (last) last.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function freePush(who, m) {
+  freeChat.log.push({ who: who, en: m.en || "", ja: m.ja || "", tip: "" });
+  renderFreeLog();
+}
+
+// 直前の自分の発言に、AIからの指摘を後付けする
+// （指摘は「こちらの言い方」への注釈なので、相手のセリフ側に置くと読み違える）
+function freeAttachTip(tip) {
+  for (let i = freeChat.log.length - 1; i >= 0; i--) {
+    if (freeChat.log[i].who === "me") { freeChat.log[i].tip = tip; return; }
+  }
+}
+
+function freeWait(on, first) {
+  if (freeWaitTimer) { clearInterval(freeWaitTimer); freeWaitTimer = null; }
+  if (!on) return;
+  const t0 = Date.now();
+  const tick = () => {
+    if (!freeChat || !freeChat.busy) { freeWait(false); return; }
+    const s = Math.round((Date.now() - t0) / 1000);
+    setStatus(`<span class="free-wait">🤖 ${first ? "相手を呼び出しています" : "考えています"}…（${s}秒）</span>`
+      + `<br><span style="font-size:12px;color:var(--sub)">この間はマイクを止めています`
+      + `${first ? "。最初の1回は起動を含むため長めにかかります" : ""}</span>`);
+  };
+  tick();
+  freeWaitTimer = setInterval(tick, 1000);
+}
+
+async function freeStart(scene, role, level, label) {
+  unlockTTS();               // 「始める」のタップの中で読み上げを解禁する（iOS 対策）
+  stopPractice(false);
+  hideTip();
+  freeChat = { conv: null, scene: scene, role: role, level: level,
+               label: label || "", log: [], busy: true };
+  render();
+  freeBtns(false);
+  setMicState("");
+  freeWait(true, true);
+  const r = await chatCall("chat_start", { scene: scene, role: role, level: level, greet: true });
+  freeWait(false);
+  if (!freeChat) return;     // 待っている間に終了された
+  if (!r || !r.conv) { freeFail(); return; }
+  freeChat.conv = r.conv;
+  freeChat.busy = false;
+  freePush("partner", r);
+  speak(r.en, beginFreeTurn);
+}
+
+async function freeSend(text) {
+  if (!freeChat || freeChat.busy) return;
+  text = (text || "").trim();
+  if (!text) return;
+  stopListening();
+  micWanted = false;
+  freeChat.busy = true;
+  freePush("me", { en: text });
+  freeBtns(false);
+  freeWait(true, false);
+  const r = await chatCall("chat", { conv: freeChat.conv, text: text });
+  freeWait(false);
+  if (!freeChat) return;
+  freeChat.busy = false;
+  if (!r || !r.en) { freeFail(); return; }
+  if (r.tip) { freeAttachTip(r.tip); }
+  freePush("partner", r);
+  speak(r.en, beginFreeTurn);
+}
+
+function beginFreeTurn() {
+  if (!freeChat || freeChat.busy) return;
+  freeBtns(true);
+  if (settings.mic && micAvailable()) {
+    setStatus(`<span class="mic-on">🗣 あなたの番です。英語で話してください</span>`
+      + `<br><span style="font-size:12px;color:var(--sub)">`
+      + `言い方が分からなければ、下の欄に日本語で書いて送っても答えてくれます</span>`);
+    micWanted = true;
+    micTurn = null;
+    micSince = Date.now();
+    micFails = 0;
+    startListening();
+  } else {
+    stopListening();
+    setStatus("🗣 あなたの番です。下の欄に英語を書いて送ってください"
+      + "（この環境ではマイク判定が使えません）");
+  }
+}
+
+function freeFail() {
+  freeChat.busy = false;
+  freeBtns(true);
+  setStatus("⚠ 相手からの返事が受け取れませんでした。"
+    + "「🎤 もう一度話す」でやり直すか、「■ 終了」で場面を選び直してください。");
+}
+
+function freeEnd(goHome) {
+  const conv = freeChat && freeChat.conv;
+  freeWait(false);
+  ttsToken++;                       // 進行中の読み上げの通知を無効化する
+  speechSynthesis.cancel();
+  ttsBusy = false;
+  partnerPending = null;
+  stopListening();
+  freeChat = null;
+  panel.classList.remove("show");
+  const row = $("freeInputRow");
+  if (row) row.classList.remove("show");
+  // PC側のプロセスを片付けてもらう。返事は待たない（画面を止めないため）
+  if (conv) { chatCall("chat_end", { conv: conv }); }
+  if (goHome) view = { page: "home" };
+  render();
+}
+
 // パネルのボタン
 $("btnReplay").onclick = () => {
+  if (freeChat) { const m = freeLastPartner(); if (m) speak(m.en); return; }
   const scene = currentScene();
   const prev = scene.turns[practice.idx - 1];
   if (prev && prev.s === "p") speak(prev.en);
@@ -11555,6 +11961,7 @@ $("btnReveal").onclick = () => {
   if (el) el.classList.remove("hidden-text");
 };
 $("btnRetry").onclick = () => {
+  if (freeChat) { $("recognized").innerHTML = ""; beginFreeTurn(); return; }
   if (practice.autoTimer) clearTimeout(practice.autoTimer);
   const t = currentScene().turns[practice.idx];
   $("recognized").innerHTML = "";
@@ -11566,9 +11973,26 @@ $("btnNext").onclick = () => {
   practice.idx++;
   playTurn();
 };
-$("btnStop").onclick = () => stopPractice(false);
+$("btnStop").onclick = () => {
+  if (freeChat) { freeEnd(false); return; }
+  stopPractice(false);
+};
+
+$("freeSendBtn").onclick = () => {
+  const el = $("freeInput");
+  const t = el.value.trim();
+  if (!t) return;
+  el.value = "";
+  freeSend(t);
+};
+$("freeInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("freeSendBtn").click(); }
+});
 
 render();
+// フリー会話が使えるかを確かめてから入口を出す。
+// 公開ページ（スマホ・家族）では、中継サーバーにPCが繋がっているかまで見る。
+chatProbe().then(() => render());
 </script>
 </body>
 </html>
