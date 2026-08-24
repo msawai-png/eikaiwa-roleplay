@@ -9858,6 +9858,7 @@ let assistantOn = false;
 let asRecog = null;      // アシスタント用の認識インスタンス（日本語）
 let asPending = null;    // 「はい」で実行する確認待ちの内容
 let asPendingAt = 0;
+let asChoices = null;   // 番号で選ばせる候補（紛らわしいとき）
 let asSince = 0;         // 無音の起点（長時間無音なら自動で止める）
 
 // 英語判定中に日本語で助けを求めるためのモード。
@@ -9950,6 +9951,7 @@ function setAssistant(on) {
     asPause();
     vocabStopVoice();
     asPending = null;
+    asChoices = null;
     if (jaHelp) { jaHelp = false; if (jaHelpTimer) clearTimeout(jaHelpTimer); jaHelpTimer = null; }
     if (asWatchdog) { clearInterval(asWatchdog); asWatchdog = null; }
   }
@@ -9965,7 +9967,8 @@ function updateAsBar() {
   bar.classList.toggle("jahelp", jaHelp);
   if (!assistantOn) return;
   let hint;
-  if (jaHelp) hint = "日本語でどうぞ：「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「答え」／「戻る」で英語に復帰";
+  if (asChoices) hint = "番号でどうぞ（1／2／3）。「やめる」で取り消し";
+  else if (jaHelp) hint = "日本語でどうぞ：「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「答え」／「戻る」で英語に復帰";
   else if (asPending) hint = "「はい」で実行、「いいえ」で取り消し";
   else if (practice && micWanted) hint = "困ったら「ヘルプ」と言えば日本語で聞けます（英語では help / hint / in Japanese / next / stop）";
   else if (practice) hint = "「ヒント」「前置詞は？」「単語は？」「◯◯って英語で何？」「わからない」「日本語で」「もう一度」「次へ」「終了」";
@@ -10024,16 +10027,183 @@ function findCategory(raw) {
   return null;
 }
 
-function findScene(raw) {
-  const q = raw.replace(/(が|を)?(やりたい|したい)(です)?$/, "")
-               .replace(/(を)?(開いて|お願いします|お願い|やって|して)$/, "");
-  if (normJa(q).length < 2) return null;
-  let best = null;
+// シーン名だけで探すと「エアコンが壊れてる時のやつ」のように
+// 名前に出てこない言葉で言われたときに見つからない。
+// そこで会話の中身（日本語訳の全文）も検索対象にする。
+let sceneHay = null;
+let gramIdf = null;
+function sceneHaystack() {
+  if (sceneHay) return sceneHay;
+  sceneHay = [];
+  const df = new Map();   // その2文字組が何シーンに出るか
   DATA.forEach(c => c.scenes.forEach(sc => {
-    const score = jaSim(q, sc.name) + (c.id === view.cat ? 0.05 : 0);
-    if (!best || score > best.score) best = { cat: c.id, scene: sc.id, name: sc.name, score };
+    const body = sc.turns.map(t => t.ja).join("");
+    const hay = normJa(sc.name + body);
+    sceneHay.push({
+      cat: c.id, scene: sc.id, name: sc.name,
+      nameN: normJa(sc.name), hay,
+    });
+    const seen = new Set();
+    for (let i = 0; i < hay.length - 1; i++) seen.add(hay.slice(i, i + 2));
+    seen.forEach(g => df.set(g, (df.get(g) || 0) + 1));
   }));
-  return best && best.score >= 0.3 ? best : null;
+  // 「する」「おねがい」のようにどのシーンにも出る文字列は重みをほぼ0にし、
+  // 「めんぜい」「むしば」のような珍しい語を決め手にする
+  const N = sceneHay.length;
+  gramIdf = new Map();
+  df.forEach((n, g) => gramIdf.set(g, Math.log(N / n)));
+  return sceneHay;
+}
+function idf(g) {
+  if (!gramIdf) sceneHaystack();
+  const v = gramIdf.get(g);
+  return v === undefined ? Math.log(sceneHay.length) : v;   // 未知語は最も重く
+}
+
+// 質問の言い方（〜のやつ、〜したい など）を落として、探したい中身だけ残す
+function searchCore(raw) {
+  return raw
+    .replace(/[の]?(やつ|もの|ところ|場面|シーン|会話)(を|が)?$/, "")
+    .replace(/(の)?(とき|時)(の)?$/, "")
+    .replace(/(が|を|は)?(やりたい|したい|練習したい)(です)?$/, "")
+    .replace(/(を)?(開いて|出して|お願いします|お願い|やって|して|ください)$/, "")
+    .trim();
+}
+
+// 話し言葉とシーン名の言葉のずれを埋める。
+// 左を言われたら右も探す語に加える（右はシーン名で使っている言い方）。
+const SEARCH_SYN = {
+  "寝られない": "不眠", "眠れない": "不眠", "眠れん": "不眠", "睡眠": "不眠",
+  "壊れ": "不具合", "動かない": "不具合", "調子悪い": "不具合",
+  "遅れ": "遅延", "遅刻": "遅延",
+  "無くし": "失くし", "なくし": "失くし", "落とし": "忘れ物",
+  "盗まれ": "盗難", "すられ": "盗難",
+  "痛い": "痛み", "具合悪い": "体調不良", "気持ち悪い": "体調不良",
+  "断り": "断る", "謝り": "謝る", "誘い": "誘う",
+  "値段": "価格", "値引き": "価格", "まけて": "価格",
+  "会計": "支払", "払い": "支払", "レジ": "支払",
+  "休み": "休暇", "有休": "有給", "辞め": "退職",
+  "怒られ": "クレーム", "苦情": "クレーム",
+  "薬局": "薬", "処方": "薬",
+};
+
+function expandQuery(q) {
+  let out = q;
+  Object.keys(SEARCH_SYN).forEach(k => {
+    if (q.includes(k)) out += SEARCH_SYN[k];
+  });
+  return out;
+}
+
+// 上位の候補をまとめて返す（紛らわしいときに選ばせるため）
+function findSceneTop(raw, n) {
+  const q = searchCore(raw);
+  if (normJa(q).length < 2) return [];
+  sceneHaystack();
+  const qx = expandQuery(q);
+  const chunks = (qx.match(/[一-龠]+|[ァ-ヶー]{2,}|[A-Za-z0-9]{2,}/g) || [])
+    .map(x => normJa(x)).filter(x => x.length >= 1);
+  const uniq = [...new Set(chunks)];
+  const scored = [];
+
+  if (uniq.length) {
+    const w = uniq.map(k => {
+      let df = 0;
+      sceneHay.forEach(x => { if (x.hay.includes(k)) df++; });
+      return Math.log(sceneHay.length / Math.max(1, df)) + 0.3;
+    });
+    const total = w.reduce((a, b) => a + b, 0);
+    sceneHay.forEach(x => {
+      let wn = 0, wb = 0;
+      uniq.forEach((k, i) => {
+        if (x.nameN.includes(k)) wn += w[i];
+        if (x.hay.includes(k)) wb += w[i];
+      });
+      const score = Math.max(wn / total, (wb / total) * 0.5, jaSim(q, x.name) * 0.9)
+        + (x.cat === view.cat ? 0.03 : 0);
+      scored.push({ cat: x.cat, scene: x.scene, name: x.name, score });
+    });
+  } else {
+    const qn = normJa(q);
+    const grams = [];
+    for (let i = 0; i < qn.length - 1; i++) grams.push(qn.slice(i, i + 2));
+    const gu = [...new Set(grams)];
+    const gw = gu.map(g => idf(g));
+    const gt = gw.reduce((a, b) => a + b, 0) || 1;
+    sceneHay.forEach(x => {
+      let wn = 0, wb = 0;
+      gu.forEach((g, i) => {
+        if (x.nameN.includes(g)) wn += gw[i];
+        if (x.hay.includes(g)) wb += gw[i];
+      });
+      const score = Math.max(wn / gt, (wb / gt) * 0.6, jaSim(q, x.name) * 0.9)
+        + (x.cat === view.cat ? 0.03 : 0);
+      scored.push({ cat: x.cat, scene: x.scene, name: x.name, score });
+    });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.filter(x => x.score >= 0.28).slice(0, n || 3);
+}
+
+function findScene(raw) {
+  const q = searchCore(raw);
+  const qn = normJa(q);
+  if (qn.length < 2) return null;
+  sceneHaystack();
+
+  // 問い合わせから内容語（漢字・カタカナ・英数のまとまり）を抜き出す。
+  // 「の」「を」「したい」のような部分は、どのシーンにも出てくるので判定に使わない。
+  const chunks = (q.match(/[一-龠]+|[ァ-ヶー]{2,}|[A-Za-z0-9]{2,}/g) || [])
+    .map(x => normJa(x)).filter(x => x.length >= 1);
+  const uniq = [...new Set(chunks)];
+
+  let best = null;
+
+  if (uniq.length) {
+    // 珍しい内容語ほど重く見る（何シーンに出るかで重みを決める）
+    const w = uniq.map(k => {
+      let df = 0;
+      sceneHay.forEach(x => { if (x.hay.includes(k)) df++; });
+      return Math.log(sceneHay.length / Math.max(1, df)) + 0.3;
+    });
+    const total = w.reduce((a, b) => a + b, 0);
+
+    sceneHay.forEach(x => {
+      let wn = 0, wb = 0;
+      uniq.forEach((k, i) => {
+        if (x.nameN.includes(k)) wn += w[i];
+        if (x.hay.includes(k)) wb += w[i];
+      });
+      // シーン名に入っているほうが強い証拠。本文中の言及は半分の重みにする
+      // （別のシーンの会話に一度出てくるだけ、という場合があるため）
+      const score = Math.max(wn / total, (wb / total) * 0.5, jaSim(q, x.name) * 0.9)
+        + (x.cat === view.cat ? 0.03 : 0);
+      if (!best || score > best.score) {
+        best = { cat: x.cat, scene: x.scene, name: x.name, score };
+      }
+    });
+  } else {
+    // ひらがなだけの言い方は内容語が取れないので、2文字組の重み付けで見る
+    const grams = [];
+    for (let i = 0; i < qn.length - 1; i++) grams.push(qn.slice(i, i + 2));
+    const gu = [...new Set(grams)];
+    const gw = gu.map(g => idf(g));
+    const gt = gw.reduce((a, b) => a + b, 0);
+    if (!gt) return null;
+    sceneHay.forEach(x => {
+      let wn = 0, wb = 0;
+      gu.forEach((g, i) => {
+        if (x.nameN.includes(g)) wn += gw[i];
+        if (x.hay.includes(g)) wb += gw[i];
+      });
+      const score = Math.max(wn / gt, (wb / gt) * 0.6, jaSim(q, x.name) * 0.9)
+        + (x.cat === view.cat ? 0.03 : 0);
+      if (!best || score > best.score) {
+        best = { cat: x.cat, scene: x.scene, name: x.name, score };
+      }
+    });
+  }
+  return best && best.score >= 0.28 ? best : null;
 }
 
 function nextSceneAfter(catId, sceneId) {
@@ -10234,6 +10404,29 @@ function handleJaCommand(heard) {
   const q = normJa(heard);
   if (!q) return;
 
+  // 番号で選ばせている最中の返事
+  if (asChoices && Date.now() - asPendingAt < 40000) {
+    const nums = { "1": 1, "いち": 1, "ひとつ": 1, "いちばん": 1, "ひとつめ": 1,
+                   "2": 2, "に": 2, "ふたつ": 2, "にばん": 2, "ふたつめ": 2,
+                   "3": 3, "さん": 3, "みつ": 3, "さんばん": 3, "みっつめ": 3 };
+    let pick = null;
+    const m = heard.match(/[1-3１-３]/);
+    if (m) pick = Number(m[0].replace(/[１-３]/, d => "123"["１２３".indexOf(d)]));
+    if (!pick) { for (const k in nums) if (q.startsWith(k)) { pick = nums[k]; break; } }
+    if (pick && asChoices[pick - 1]) {
+      const c = asChoices[pick - 1];
+      asChoices = null; clearHint(); updateAsBar();
+      runPendingScene({ cat: c.cat, scene: c.scene, name: c.name });
+      return;
+    }
+    if (/^(やめ|キャンセル|いいえ|ちがう|違う)/.test(q)) {
+      asChoices = null; clearHint(); updateAsBar();
+      speakJa("取り消しました。");
+      return;
+    }
+    asChoices = null; clearHint(); updateAsBar();   // 番号以外なら通常の解釈に進む
+  }
+
   // 確認待ちへの返事
   if (asPending && Date.now() - asPendingAt < 30000) {
     if (/^(はい|うん|おっけ|オッケ|ok|おけ|おねがい|お願い|やる|進んで|すすんで|開始|スタート)/.test(q)) {
@@ -10320,12 +10513,21 @@ function handleJaCommand(heard) {
     return;
   }
 
-  // シーン名の検索 →「これでいいですか」の確認
-  const hit = findScene(heard);
-  if (hit) {
-    asPending = { cat: hit.cat, scene: hit.scene, name: hit.name };
-    asPendingAt = Date.now(); updateAsBar();
-    speakJa(hit.name + "、でよろしいですか？");
+  // シーン名の検索。1位が抜けていれば確認、紛らわしければ番号で選ばせる
+  const tops = findSceneTop(heard, 3);
+  if (tops.length) {
+    const clear = tops.length === 1 || (tops[0].score - tops[1].score) >= 0.15;
+    if (clear) {
+      asPending = { cat: tops[0].cat, scene: tops[0].scene, name: tops[0].name };
+      asPendingAt = Date.now(); updateAsBar();
+      speakJa(tops[0].name + "、でよろしいですか？");
+    } else {
+      asChoices = tops;
+      asPendingAt = Date.now(); updateAsBar();
+      showHint({ show: tops.map((x, i) => (i + 1) + ". " + x.name).join("　/　") }, null);
+      speakJa("近いものが" + tops.length + "つあります。" +
+        tops.map((x, i) => (i + 1) + "、" + x.name).join("。") + "。番号でどうぞ。");
+    }
     return;
   }
   // ここまでルールで拾えなかった発話は AI に回す（設定してあるときだけ）
@@ -11260,17 +11462,41 @@ function beginMyTurn(t) {
   }
 }
 
+// 採点の下ごしらえ。活用形を原形に寄せ、a / the / is のような機能語は外す。
+// 素の単語一致で採点すると、言えているのに機能語のせいで不正解になりやすい。
+function canonWord(w) {
+  const k = norm(w);
+  const f = dictReady ? lookupWord(k) : null;
+  return f ? f.key : k;
+}
+function contentSet(words) {
+  const out = new Set();
+  words.forEach(w => {
+    const k = canonWord(w);
+    if (POS_FUNC.has(k) || PREPS.has(k)) return;   // 機能語・前置詞は採点に使わない
+    out.add(k);
+  });
+  return out;
+}
+
 function showFeedback(said, t) {
   const model = tokenize(t.en);
   const saidW = tokenize(said);
-  const saidSet = new Set(saidW);
-  const hit = model.filter(w => saidSet.has(w)).length;
-  const score = model.length ? Math.round(hit / model.length * 100) : 0;
 
-  // 認識結果を、模範文に含まれる単語=緑 / 含まれない=赤 で表示
-  const modelSet = new Set(model);
-  const colored = saidW.map(w => `<span class="${modelSet.has(w) ? "w-ok" : "w-ng"}">${w}</span>`).join(" ");
-  const badge = `<span id="scoreBadge" class="${score >= 70 ? "score-high" : "score-low"}">一致 ${score}%</span>`;
+  // 内容語がどれだけ言えたかで採点する（語順・余分な語・冠詞の違いは許す）
+  const modelC = contentSet(model);
+  const saidC = contentSet(saidW);
+  let hit = 0;
+  modelC.forEach(w => { if (saidC.has(w)) hit++; });
+  const score = modelC.size
+    ? Math.round(hit / modelC.size * 100)
+    : (saidW.length ? 100 : 0);   // 内容語が無い短い応答（Yes, please. など）は言えた扱い
+
+  // 表示は、模範文に含まれる語=緑 / 含まれない語=赤（原形に寄せて見比べる）
+  const modelAll = new Set(model.map(canonWord));
+  const colored = saidW.map(w =>
+    `<span class="${modelAll.has(canonWord(w)) ? "w-ok" : "w-ng"}">${w}</span>`).join(" ");
+  const badge = `<span id="scoreBadge" class="${score >= 70 ? "score-high" : "score-low"}">内容一致 ${score}%</span>`;
   $("recognized").innerHTML = `あなた：「${colored}」 ${badge}`;
 
   // 隠しモードなら答えを開示
