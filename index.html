@@ -331,6 +331,18 @@
     #panelBtns .btn { flex: 1 1 46%; padding: 11px 8px; font-size: 13px; }
   }
 
+    /* 単語練習：話す代わりに書いて答える欄 */
+    .vinput { display: flex; gap: 8px; margin-top: 14px; }
+    .vinput input {
+      flex: 1; min-width: 0; padding: 10px 12px; font-size: 16px;
+      border: 1px solid #cbd5e1; border-radius: 8px;
+    }
+    .vinput .btn { flex: 0 0 auto; padding: 10px 16px; font-size: 13px; }
+    .vmsg { margin-top: 10px; font-size: 14px; min-height: 20px; font-weight: 700; }
+    .vmsg.ok { color: var(--ok); }
+    .vmsg.ng { color: var(--ng); }
+    .vtyped { margin-top: 8px; font-size: 13px; color: var(--sub); }
+
     /* フリー会話：話す代わりに書いて送る欄（マイクが使えない端末用・日本語の質問用） */
     #freeInputRow { display: none; gap: 8px; margin-top: 8px; }
     #freeInputRow.show { display: flex; }
@@ -11050,9 +11062,11 @@ function renderVocab() {
 }
 
 function vocabIntro() {
-  return `<div class="note">日本語の意味が出るので、<b>英語で声に出して言ってから</b>「答えを見る」を押してください。
-    言えたかどうかを自己申告すると、間違えたものが短い間隔で、覚えたものが長い間隔で出るようになります。
-    音声操作をオンにすれば「言えた」「言えなかった」「答え」も声で操作できます。</div>`;
+  return `<div class="note">日本語の意味が出るので、英語で答えてください。答え方は3つあります。
+    <b>入力欄に書いて「答える」</b>（正誤が自動で決まります・Enter でも送れます）、
+    <b>声に出して言ってから「答えを見る」を押して自己申告</b>、
+    <b>音声操作をオンにして声で答える</b>。
+    間違えたものが短い間隔で、覚えたものが長い間隔で出るようになります。</div>`;
 }
 
 function startVocab(scope) {
@@ -11095,9 +11109,22 @@ function drawCard() {
     area.innerHTML = `<div class="card">${head}
       <div class="mean">${esc(c.mean)}</div>
       <div class="shape">${esc(vShape(c.k))}</div>
-      <div class="btns"><button class="btn btn-primary" id="vShow">答えを見る</button></div>
+      <div class="vinput">
+        <input id="vType" placeholder="英語で書いて答える" autocomplete="off"
+               autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button class="btn btn-primary" id="vSend">答える</button>
+      </div>
+      <div class="vmsg" id="vMsg"></div>
+      <div class="btns"><button class="btn btn-ghost" id="vShow">答えを見る</button></div>
     </div>`;
     $("vShow").onclick = () => { vocabStopVoice(); vocab.shown = true; drawCard(); };
+    $("vSend").onclick = submitVocabTyped;
+    $("vType").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); submitVocabTyped(); }
+    });
+    // 一度でも書いて答えた人には、次の問題でも入力欄を出しておく。
+    // 最初から当てるとスマホでいきなりキーボードが出て、声で使う人の邪魔になる。
+    if (vocab.typed) $("vType").focus();
     // 音声操作がオンなら、意味を読み上げて英語の答えを待つ
     if (assistantOn && micAvailable()) {
       vocab.tries = 0;
@@ -11109,6 +11136,7 @@ function drawCard() {
       <div class="ans">${esc(c.k)}</div>
       <div class="mean" style="font-size:16px">${esc(c.mean)}</div>
       <div class="ex">${esc(c.ex)}<div class="ja">${esc(c.exja)}</div></div>
+      ${vocab.lastTyped ? `<div class="vtyped">あなたの答え：${esc(vocab.lastTyped)}</div>` : ""}
       <div class="btns">
         <button class="btn btn-ok" id="vOk">言えた</button>
         <button class="btn btn-ng" id="vNg">言えなかった</button>
@@ -11145,11 +11173,60 @@ function gradeVocab(ok) {
   st.d = Date.now() + VBOX_DAYS[Math.min(VBOX_DAYS.length - 1, st.b - 1)] * DAY_MS;
   v[c.k] = st;
   vocabSave(v);
-  vocab.i++; vocab.shown = false;
+  vocab.i++;
+  vocab.shown = false;
+  vocab.lastTyped = "";   // 前の問題の答えを次の画面に残さない
+  vocab.tries = 0;
   drawCard();
 }
 
 function vocabShowAnswer() { if (vocab && !vocab.shown) { vocab.shown = true; drawCard(); } }
+
+// ---- 書いて答えるモード ----
+//
+// マイクが使えない端末（iPhone の Chrome）や、声を出せない場所でも
+// 機械的に正誤が決まるようにするためのもの。綴りの確認にもなる。
+
+// 答え合わせ。答えの語が全部含まれていれば正解（言い直し・余分な語は許す）。
+// **声の経路（handleVocabAnswer）もこれを使う。** 判定を2か所に持つと、
+// 声と文字で結果が食い違う。
+function vocabMatches(said, key) {
+  const x = (said || "").toLowerCase().replace(/[^a-z' ]/g, " ").replace(/\s+/g, " ").trim();
+  const saidW = new Set(tokenize(x));
+  const keyW = tokenize(key);
+  return keyW.length > 0 && keyW.every(w => saidW.has(w));
+}
+
+function vMsg(kind, text) {
+  const m = $("vMsg");
+  if (m) { m.className = "vmsg " + kind; m.textContent = text; }
+}
+
+function submitVocabTyped() {
+  if (!vocab || vocab.shown) return;
+  const el = $("vType");
+  const raw = (el ? el.value : "").trim();
+  if (!raw) { if (el) el.focus(); return; }
+  vocab.typed = true;
+  vocab.lastTyped = raw;
+  vocabStopVoice();   // 声で待っている最中なら止める（同じ問題を二重に判定しないため）
+
+  const c = vocab.deck[vocab.i];
+  if (vocabMatches(raw, c.k)) {
+    vMsg("ok", "✅ 正解！");
+    setTimeout(() => vocabReveal("ok", true), 500);
+    return;
+  }
+  // 声のときと同じく、1回だけ言い直せる
+  vocab.tries = (vocab.tries || 0) + 1;
+  if (vocab.tries >= 2) {
+    vMsg("ng", "✗ 惜しい。答えを見てみましょう。");
+    setTimeout(() => vocabReveal("ng"), 700);
+    return;
+  }
+  vMsg("ng", "✗ ちがいます。もう一度どうぞ。");
+  if (el) { el.value = ""; el.focus(); }
+}
 
 // ---- 音声で答えるモード ----
 // 日本語の意味を読み上げ → 英語の答えを聞き取り → 合っていれば「正解」、
@@ -11220,11 +11297,8 @@ function handleVocabAnswer(saidRaw) {
   }
   if (V_GIVEUP.has(x)) { vocabReveal("ng"); return; }
 
-  // 答え合わせ：答えの語が全部含まれていれば正解（言い直し・余分な語は許す）
-  const saidW = new Set(tokenize(x));
-  const keyW = tokenize(c.k);
-  const okAll = keyW.length > 0 && keyW.every(w => saidW.has(w));
-  if (okAll) {
+  // 答え合わせ（声でも文字でも同じ判定を使う）
+  if (vocabMatches(x, c.k)) {
     vocabStopVoice();
     speakJa("正解！", () => vocabReveal("ok", true));
     return;
