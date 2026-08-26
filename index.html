@@ -380,6 +380,7 @@
       <button class="btn btn-ghost" id="btnAnswerVoice">🗣 答えの音声を聞く</button>
       <button class="btn btn-ghost" id="btnReveal">👀 答えの英文を見る</button>
       <button class="btn btn-ghost" id="btnRetry">🎤 もう一度話す</button>
+      <button class="btn btn-ghost" id="btnAiCheck">🤖 AIに見てもらう</button>
       <button class="btn btn-primary" id="btnNext">言えた → 次へ ▶</button>
       <button class="btn btn-ghost" id="btnStop">■ 終了</button>
     </div>
@@ -11578,7 +11579,6 @@ function currentScene() {
 // ============================================================
 function startPractice() {
   unlockTTS();            // 「会話を開始」のタップの中で読み上げを解禁する（iOS 対策）
-  aiWarm();               // 採点や質問で待たせないよう、AI側の常駐を先に起こす
   stopPractice(false);
   hideTip();
   practice = { idx: 0, autoTimer: null };
@@ -11714,47 +11714,31 @@ function showFeedback(said, t) {
   const el = $("en" + practice.idx);
   if (el) el.classList.remove("hidden-text");
 
-  // 語の一致だけでは「言えているのに不正解」になる場面があるため、
-  // 一致率が高くないときは AI に意味で判定させる（設定してあるときだけ）
-  if (aiReady() && score < 85) {
-    // 先にルールの判定を出す。AIの返事は4〜50秒かかることがあり、
-    // 待たせると画面が止まったように見えるため。
-    // ただし自動で次へ進むのは止める（進んだ後に判定が届くと辻褄が合わない）。
-    fallbackFeedback(score, t, true);
-    const idx = practice.idx;
-    aiGrade(said, t, idx).then(done => {
-      if (done) return;
-      if (!practice || practice.idx !== idx) return;
-      // AIが答えられなかった場合。ルールの判定のまま進められるようにする
-      setStatus((score >= 70 ? "✅ 語はおおむね合っています。" : "🔁 模範文と少し違いました。")
-        + "<br>AIの判定は受け取れませんでした。もう一度話すか、次へ進んでください");
-    });
-    return;
-  }
+  // 採点は**既定ではルールだけ**で即座に返す。
+  // AI に意味で見てもらうのは「🤖 AIに見てもらう」を押した時だけ。
+  // 毎回 AI を待つと、文を1つ読むたびに 4〜50秒手が止まり、読む練習にならない。
+  practice.lastSaid = said;
   fallbackFeedback(score, t);
 }
 
-// AI を使わない場合の従来どおりの判定。
-// waitingAi = true のときは、この後 AI の判定が届いて上書きされる。
-// その場合は**自動で次へ進まない**（進んだ後に判定が届くと辻褄が合わないため）。
-function fallbackFeedback(score, t, waitingAi) {
-  if (waitingAi) {
-    stopListening();
-    setStatus((score >= 70 ? "✅ 語はおおむね合っています。" : "🔁 模範文とは少し違います。")
-      + "<br><span class='free-wait'>🤖 AIが意味で見ています…</span>"
-      + "<br><span style='font-size:12px;color:var(--sub)'>"
-      + "待たずに「次へ」や「もう一度話す」を押しても構いません</span>");
-    setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true });
-    return;
-  }
+// ルールだけの判定。読む練習のテンポを保つため、ここでは AI を待たない。
+function fallbackFeedback(score, t) {
   if (score >= 70) {
     stopListening();   // 直後に相手が話すので、その声を拾わないよう止める
     setStatus("✅ よく言えています！自動で次に進みます…");
     setBtns({ replay: false, answer: true, reveal: false, retry: true, next: true });
     practice.autoTimer = setTimeout(() => { practice.idx++; playTurn(); }, 2200);
   } else {
-    setStatus("🔁 模範文と少し違いました。答えを確認して、もう一度話すか次へ進んでください");
-    setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true });
+    // 一致率が低いときだけ、AIに見てもらう選択肢を出す。
+    // ここは自動で次へ進まないので、ボタンが消えずに残る。
+    // 70%以上で出しても、2.2秒で次へ進むため押す前に消えてしまう。
+    const canAi = aiReady();
+    setStatus("🔁 模範文と少し違いました。答えを確認して、もう一度話すか次へ進んでください"
+      + (canAi ? "<br><span style='font-size:12px;color:var(--sub)'>"
+               + "言えているのに違うと出た場合は「🤖 AIに見てもらう」で意味を見てもらえます"
+               + "（返事まで数秒〜十数秒かかります）</span>" : ""));
+    setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true, aiCheck: canAi });
+    if (canAi) aiWarm();   // 押す頃に温まっているよう、ここで先に起こしておく
   }
 }
 
@@ -11769,6 +11753,7 @@ function setBtns(v) {
   $("btnReveal").style.display = v.reveal ? "" : "none";
   $("btnRetry").style.display = v.retry ? "" : "none";
   $("btnNext").style.display = v.next ? "" : "none";
+  $("btnAiCheck").style.display = v.aiCheck ? "" : "none";
 }
 
 
@@ -12072,6 +12057,26 @@ $("btnNext").onclick = () => {
 $("btnStop").onclick = () => {
   if (freeChat) { freeEnd(false); return; }
   stopPractice(false);
+};
+
+// 押した時だけ AI に意味で判定してもらう。
+// 自動で走らせると、読む練習のたびに手が止まる。
+$("btnAiCheck").onclick = () => {
+  if (!practice) return;
+  const t = currentScene().turns[practice.idx];
+  const said = practice.lastSaid || "";
+  if (!said) return;
+  const idx = practice.idx;
+  setStatus("<span class='free-wait'>🤖 AIが意味で見ています…</span>"
+    + "<br><span style='font-size:12px;color:var(--sub)'>"
+    + "待たずに「次へ」や「もう一度話す」を押しても構いません</span>");
+  setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true });
+  aiGrade(said, t, idx).then(done => {
+    if (done) return;
+    if (!practice || practice.idx !== idx) return;
+    setStatus("AIの判定は受け取れませんでした。もう一度話すか、次へ進んでください");
+    setBtns({ replay: true, answer: true, reveal: false, retry: true, next: true, aiCheck: true });
+  });
 };
 
 $("freeSendBtn").onclick = () => {
