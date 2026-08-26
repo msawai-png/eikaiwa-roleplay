@@ -9885,6 +9885,13 @@ function runAiAction(res) {
       speakJa(hit.name + "、でよろしいですか？");
       return true;
     }
+    case "open_free": {
+      if (!chatReady()) { speakJa("フリー会話はいまつながっていません。"); return true; }
+      if (practice) stopPractice(false);
+      openFree();
+      speakJa(say || "フリー会話を開きます。");
+      return true;
+    }
     case "start":
       if (view.page === "dialogue") { speakJa(say || "始めます。", () => startPractice()); return true; }
       return false;
@@ -10117,6 +10124,28 @@ function showAsHeard(text) {
 }
 
 // ---- 日本語の言い回しの照合 ----
+// **移動・変更の言い回し。** 練習中でもこれを含むときは、
+// 手助けの処理（ヒント・答え）を飛ばして移動として扱う。
+//
+// 「単語おしえて」＝ヒントが欲しい と
+// 「単語練習に移りたい」＝画面を移りたい は、語だけでは区別できない。
+// 違うのは**動きの言い回し**なので、そこで振り分ける。
+const AS_MOVE = new RegExp([
+  "移り", "移る", "移動", "行きたい", "開いて", "ひらいて",
+  "にして", "に変え", "変えたい", "切り替", "切替", "戻りたい", "もどりたい",
+].join("|"));
+
+// 「移動したい・設定を変えたい」を思わせる語。練習中はこれを含むときだけAIに回す。
+// 広すぎると元の遅さに戻り、狭すぎると移動できなくなるので、
+// **画面の名前・切り替えの動詞・設定の言葉**に絞ってある。
+const AS_NAV = new RegExp([
+  "単語", "たんご", "語彙", "フリー", "自由", "会話", "シーン", "場面", "カテゴリ",
+  "一覧", "ホーム", "最初",                                   // 行き先
+  "戻", "移", "開", "変え", "切り替", "切替", "やめ", "終わ", "次の", "別の",
+  "やりたい", "したい", "行きたい", "お願い",                  // 動き
+  "設定", "モード", "速", "はや", "ゆっくり", "遅", "隠", "表示", "英文", "思い出",
+].join("|"));
+
 function normJa(x) {
   return x.toLowerCase().replace(/[\s。、．，,.・「」『』（）()？！?!…〜ー]/g, "");
 }
@@ -10586,9 +10615,19 @@ function handleJaCommand(heard) {
   // 単語学習中のコマンド
   if (view.page === "vocab" && handleVocabJa(q)) return;
 
-  // 練習中（マイク判定オフのとき）の日本語コマンド
-  if (practice && handlePracticeJa(q, heard)) return;
+  // 練習中（マイク判定オフのとき）の日本語コマンド。
+  // **移動の言い回しを含むときは飛ばす。** ここで拾われると、後段の移動ルールにも
+  // AIにも届かず、「たんごのやつに移りたい」が「単語のヒント」になってしまう。
+  if (practice && !AS_MOVE.test(heard) && handlePracticeJa(q, heard)) return;
 
+  // normJa は長音符「ー」を落とすので、正規化後の形で書く（フリー会話 → フリ会話）
+  if (/フリ会話|ふり会話|フリトク|ふりとく|自由に話|自由な会話|台本なし|台本のない/.test(q)) {
+    if (!chatReady()) { speakJa("フリー会話はいまつながっていません。"); return; }
+    if (practice) stopPractice(false);
+    openFree();
+    speakJa("フリー会話を開きます。場面を選んでください。");
+    return;
+  }
   if (/単語練習|単語学習|単語の練習|たんごれんしゅう|熟語練習|フラッシュカード|単語帳/.test(q)) {
     openVocab();
     speakJa("単語練習を開きます。「はじめて」と言うと出題します。");
@@ -10639,8 +10678,15 @@ function handleJaCommand(heard) {
     return;
   }
 
-  // シーン名の検索。1位が抜けていれば確認、紛らわしければ番号で選ばせる
-  const tops = findSceneTop(heard, 3);
+  // シーン名の検索。1位が抜けていれば確認、紛らわしければ番号で選ばせる。
+  //
+  // **読む練習の最中は、「シーン」「場面」と明言したときだけ動かす。**
+  // この検索は会話本文まで見る作りなので、練習中の独り言や
+  // 「設定を変えたい」のような依頼にも当たってしまい、
+  // 関係のないシーンの確認や番号選びが割り込む（2026-08-25 実測）。
+  // 練習していない画面ではシーンを探すのが目的なので、今までどおり何でも見る。
+  const searchScenes = !practice || /シーン|しーん|場面|ばめん/.test(heard);
+  const tops = searchScenes ? findSceneTop(heard, 3) : [];
   if (tops.length) {
     const clear = tops.length === 1 || (tops[0].score - tops[1].score) >= 0.15;
     if (clear) {
@@ -10656,11 +10702,14 @@ function handleJaCommand(heard) {
     }
     return;
   }
-  // ここまでルールで拾えなかった発話は AI に回す（設定してあるときだけ）
+  // ここまでルールで拾えなかった発話は AI に回す（設定してあるときだけ）。
+  //
+  // **ただし読む練習の最中は、移動・設定の依頼らしいものだけに絞る。**
+  // 独り言や言い直しまで回すと、そのたびに4〜40秒待たされてテンポが壊れる。
+  // 練習中に英語の質問をしたい場合は「ヘルプ」と言ってから日本語で聞く
+  // （handlePracticeJa の中の別経路で、そちらは今までどおりAIが答える）。
   if (aiReady() && normJa(heard).length >= 3) {
-    // 練習中の質問らしければ質問として、それ以外は操作として解釈させる
-    const looksLikeQuestion = /なぜ|なんで|どうして|どういう|違い|使い分け|丁寧|自然|ネイティブ|意味|\?|？/.test(heard);
-    if (practice && looksLikeQuestion) { aiAsk(heard); return; }
+    if (practice && !AS_NAV.test(heard)) return;
     aiInterpret(heard).then(done => {
       if (!done && /やりたい|したい|開いて|お願い/.test(heard)) {
         speakJa("見つかりませんでした。別の言い方でどうぞ。");
