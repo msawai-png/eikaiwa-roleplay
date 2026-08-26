@@ -331,6 +331,23 @@
     #panelBtns .btn { flex: 1 1 46%; padding: 11px 8px; font-size: 13px; }
   }
 
+    /* 音声操作のガイド */
+    .guide-sec { margin: 18px 0; }
+    .guide-sec h3 {
+      margin: 0 0 8px; font-size: 15px; color: var(--accent);
+      border-bottom: 2px solid #e2e8f0; padding-bottom: 6px;
+    }
+    .guide-note { font-size: 13px; color: var(--sub); margin: 6px 0 8px; }
+    .guide-tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .guide-tbl td { padding: 7px 8px; border-bottom: 1px solid #eef2f7; vertical-align: top; }
+    .guide-tbl td.say { width: 42%; font-weight: 700; white-space: normal; }
+    @media (max-width: 720px) {
+      .guide-tbl, .guide-tbl tbody, .guide-tbl tr, .guide-tbl td { display: block; width: auto; }
+      .guide-tbl td { border: none; padding: 2px 0; }
+      .guide-tbl td.say { width: auto; padding-top: 10px; }
+      .guide-tbl tr { border-bottom: 1px solid #eef2f7; padding-bottom: 8px; }
+    }
+
     /* 単語練習：話す代わりに書いて答える欄 */
     .vinput { display: flex; gap: 8px; margin-top: 14px; }
     .vinput input {
@@ -9806,11 +9823,40 @@ function setAiState(text) {
 // 接続先は chatCall が決める（PCで開いていれば同じ場所の /ai、
 // スマホ・家族なら中継サーバー）。ここでは二重呼び出しを防ぎ、
 // 待っていることを画面に出す役目だけを持つ。
+// AI は一度に1件しか処理できない（PC側も1つの常駐で順に答えるため）。
+// 処理中に次を言われたら**順番待ちにする**。黙って無視すると、
+// 届いていないのか壊れたのか利用者に分からない。
+// ただし溜めすぎない。何十秒も後に順番が回ってきて急に画面が変わる方が困る。
+let aiWaiting = 0;           // 実行中の1件を含む、抱えている数
+const AI_QUEUE_MAX = 3;      // 実行中1件＋順番待ち2件まで。これを超えたら断る
+let aiChain = Promise.resolve();
+
 async function aiCall(mode, payload) {
-  if (!aiReady() || aiBusy) return null;
+  if (!aiReady()) return null;
+  if (aiWaiting >= AI_QUEUE_MAX) {
+    setAiState("⚠ 立て込んでいます。少し待ってからもう一度どうぞ");
+    return null;
+  }
+
+  aiWaiting++;
+  const myTurn = aiChain;
+  let release;
+  aiChain = new Promise(r => { release = r; });   // 次の人はこれを待つ
+  try {
+    if (aiBusy) setAiState("⏳ 順番待ちです（前の処理が終わってから始めます）");
+    await myTurn;
+    return await aiRun(mode, payload);
+  } finally {
+    aiWaiting--;
+    release();
+  }
+}
+
+async function aiRun(mode, payload) {
   aiBusy = true;
   const t0 = Date.now();
-  const tick = () => setAiState("🤖 考えています…（" + Math.round((Date.now() - t0) / 1000) + "秒）");
+  const tick = () => setAiState("🤖 考えています…（" + Math.round((Date.now() - t0) / 1000) + "秒）"
+    + (aiWaiting > 1 ? "／あと" + (aiWaiting - 1) + "件待っています" : ""));
   tick();
   const timer = setInterval(tick, 1000);
   try {
@@ -10621,6 +10667,12 @@ function handleJaCommand(heard) {
   if (practice && !AS_MOVE.test(heard) && handlePracticeJa(q, heard)) return;
 
   // normJa は長音符「ー」を落とすので、正規化後の形で書く（フリー会話 → フリ会話）
+  if (/使い方|つかいかた|何ができる|なにができる|ガイド|操作方法|ヘルプ画面|コマンド一覧/.test(q)) {
+    if (practice) stopPractice(false);
+    openGuide();
+    speakJa("音声操作でできることの一覧を開きます。");
+    return;
+  }
   if (/フリ会話|ふり会話|フリトク|ふりとく|自由に話|自由な会話|台本なし|台本のない/.test(q)) {
     if (!chatReady()) { speakJa("フリー会話はいまつながっていません。"); return; }
     if (practice) stopPractice(false);
@@ -11380,6 +11432,7 @@ function render() {
   else if (view.page === "scenes") renderScenes();
   else if (view.page === "vocab") renderVocab();
   else if (view.page === "free") renderFree();
+  else if (view.page === "guide") renderGuide();
   else renderDialogue();
 }
 
@@ -11408,6 +11461,14 @@ function renderHome() {
           ${vst.due ? `・<b style="color:var(--ng)">今日の復習 ${vst.due}</b>` : ""}</div>
       </div>
     </div>`;
+  const guideEntry = `
+    <div class="vocab-top" onclick="openGuide()" style="border-color:#fde68a;background:#fffbeb">
+      <span class="emoji">🎙</span>
+      <div>
+        <div class="name">音声操作でできること</div>
+        <div class="desc">何と言えば何ができるかの一覧。画面ごとに分けてあります</div>
+      </div>
+    </div>`;
   const aiRow = `
     <div class="ai-row" id="aiRow">
       <span class="dot ${chatReady() ? "on" : ""}"></span>
@@ -11426,7 +11487,7 @@ function renderHome() {
           chatLocal ? "" : "（PC経由なので、1回目の返事に少し余分にかかります）"}</div>
       </div>
     </div>` : "";
-  main.innerHTML = fileNote + vocabEntry + freeEntry + aiRow + `<div class="grid">` + DATA.map(c => `
+  main.innerHTML = fileNote + vocabEntry + freeEntry + guideEntry + aiRow + `<div class="grid">` + DATA.map(c => `
     <div class="tile" onclick="openCategory('${c.id}')">
       <div class="emoji">${c.emoji}</div>
       <div class="name">${c.name}</div>
@@ -11805,6 +11866,117 @@ function setBtns(v) {
   $("btnAiCheck").style.display = v.aiCheck ? "" : "none";
 }
 
+
+
+// ============================================================
+// 音声操作のガイド
+//
+// **この一覧は index.html のルールを書き写したもの。**
+// ルールを変えたらここも直す。食い違うと「書いてあるのに動かない」状態になり、
+// 利用者は自分の言い方が悪いのだと思ってしまう。
+// ============================================================
+const GUIDE_SECTIONS = [
+  {
+    title: "どの画面でも",
+    rows: [
+      ["「戻る」", "1つ前の画面へ"],
+      ["「単語練習」「単語帳」", "単語・熟語の練習を開く"],
+      ["「フリー会話」「自由に話したい」", "台本なしの会話を開く（繋がっている時だけ）"],
+      ["「使い方」「何ができる？」", "この一覧を開く"],
+      ["「思い出すモード」", "自分のセリフの英文を隠す"],
+      ["「英文を見る」", "英文を表示する"],
+      ["「ゆっくり」「速く」", "読み上げの速さを変える"],
+    ],
+  },
+  {
+    title: "ホーム・シーン一覧で",
+    rows: [
+      ["カテゴリ名（「病院」「旅行」など）", "そのカテゴリを開く"],
+      ["シーン名・やりたいこと", "近いシーンを探して確認する。<b>決まった言い方でなくても、AIが解釈します</b>"],
+      ["「はい」／「いいえ」", "確認への返事"],
+      ["「1」「2」「3」", "候補が複数出たときの選択"],
+      ["「開始」「はじめて」", "開いているシーンの練習を始める"],
+      ["「次のシーン」", "同じカテゴリの次へ"],
+    ],
+  },
+  {
+    title: "会話の練習中（日本語）",
+    note: "テンポを保つため、<b>練習中は独り言に反応しません</b>。移動・設定の依頼と、下の手助けだけが動きます。",
+    rows: [
+      ["「ヒント」", "段階的にヒントを出す（言うたびに詳しくなる）"],
+      ["「答え」「わからない」", "英文を見せて読み上げる"],
+      ["「前置詞は？」", "前置詞だけを教える"],
+      ["「単語」「キーワード」", "使う単語を教える"],
+      ["「出だし」「最初」", "文の始め方を教える"],
+      ["「日本語で」「訳して」", "相手のセリフを日本語で"],
+      ["「もう一度」", "相手のセリフをもう一度"],
+      ["「◯◯って英語で何？」", "日本語から英語を引く"],
+      ["「なぜ〜？」「〜との違いは？」", "文法や言い換えの質問に<b>AIが答える</b>（数秒〜十数秒）"],
+      ["「次」「スキップ」", "次のターンへ"],
+      ["「最初から」", "このシーンをやり直す"],
+      ["「終了」「やめる」", "練習を終える"],
+      ["「単語練習に移りたい」など", "<b>移動したい時は「移りたい」「にして」を付ける</b>。付けないと手助けとして扱われます"],
+      ["「◯◯のシーンにしたい」", "別のシーンへ。<b>練習中は「シーン」「場面」と言ってください</b>"],
+    ],
+  },
+  {
+    title: "会話の練習中（英語）",
+    note: "マイク判定がオンのときは英語で聞き取っているため、操作も英語で受け付けます（決まった言い方のみ）。",
+    rows: [
+      ["help / question / wakaranai", "日本語で聞けるモードに切り替える"],
+      ["answer / I don't know / I give up", "答えを見せて読み上げる"],
+      ["hint / give me a hint", "ヒント"],
+      ["in Japanese / translate", "相手のセリフを日本語で"],
+      ["repeat / again / one more time", "もう一度"],
+      ["slower / faster", "読み上げの速さ"],
+      ["next / skip", "次へ"],
+      ["stop", "練習を終える"],
+    ],
+  },
+  {
+    title: "単語・熟語の練習中",
+    rows: [
+      ["「はじめて」「開始」", "20問出題する"],
+      ["「答え」「わからない」", "答えを見せる"],
+      ["「言えた」／「言えなかった」", "自己申告して次へ"],
+      ["「発音」「読んで」", "答えと例文を読み上げる"],
+      ["「次」「スキップ」", "次の問題へ"],
+      ["「おまかせ」「復習優先」", "復習が必要なものから出す"],
+      ["「最初から全部」「一から」", "順に全部出す"],
+      ["「終了」「やめる」", "単語練習を終える"],
+    ],
+    tail: "答えは<b>入力欄に書いても</b>判定できます（Enter で送れます）。声を出せない時に使えます。",
+  },
+];
+
+window.openGuide = () => { view = { page: "guide" }; render(); };
+
+function renderGuide() {
+  backBtn.style.display = "";
+  crumb.textContent = "🎙 音声操作でできること";
+  panel.classList.remove("show");
+  const row = $("freeInputRow");
+  if (row) row.classList.remove("show");
+
+  const head = `
+    <div class="note">
+      画面右上の <b>「🎙 音声操作」</b> を押すと、声で操作できるようになります。
+      ${micAvailable() ? "" : "<br><b>この環境では音声認識が使えません</b>（iPhone は Safari でお試しください）。"}
+      ${aiReady() ? "<br>AIが繋がっているので、<b>決まった言い方から外れても解釈します</b>"
+                    + "（返事まで数秒〜十数秒かかります）。"
+                  : "<br>AIは繋がっていないため、下の決まった言い方だけが動きます。"}
+    </div>`;
+
+  main.innerHTML = head + GUIDE_SECTIONS.map(sec => `
+    <div class="guide-sec">
+      <h3>${sec.title}</h3>
+      ${sec.note ? `<div class="guide-note">${sec.note}</div>` : ""}
+      <table class="guide-tbl">
+        ${sec.rows.map(r => `<tr><td class="say">${r[0]}</td><td>${r[1]}</td></tr>`).join("")}
+      </table>
+      ${sec.tail ? `<div class="guide-note">${sec.tail}</div>` : ""}
+    </div>`).join("") + `<div style="height:60px"></div>`;
+}
 
 // ============================================================
 // フリー会話（台本なし・AIが相手）
