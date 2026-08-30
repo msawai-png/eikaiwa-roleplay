@@ -9510,14 +9510,34 @@ window.addEventListener("orientationchange", hideTip);
 // ---- 音声合成（TTS） ----
 let enVoice = null;
 let jaVoice = null;
+// 英語の声を並べる。上にあるものほど自然に聞こえる。
+// **`Desktop` が付く声（Zira / David）は Windows の最も古い音声合成**で、
+// 明らかに機械的なので最後に回す。自動で選ばれて「前より悪くなった」と
+// 感じる原因になっていた（2026-08-26 実測）。
+function voiceRank(v) {
+  const n = v.name;
+  if (/Natural/.test(n)) return 0;                        // Edge の自然音声
+  if (/Online/.test(n)) return 1;                         // Edge のオンライン音声
+  if (/Google/.test(n)) return 2;                         // Chrome のネット音声
+  if (/Samantha|Ava|Allison|Siri/.test(n)) return 3;       // iPhone の高品質声
+  if (/Desktop/.test(n)) return 9;                        // Windows の旧音声（機械的）
+  return 5;
+}
+
+function enVoices() {
+  return speechSynthesis.getVoices()
+    .filter(v => v.lang.startsWith("en"))
+    .sort((a, b) => voiceRank(a) - voiceRank(b)
+      || (b.lang === "en-US") - (a.lang === "en-US")
+      || a.name.localeCompare(b.name));
+}
+
 function pickVoice() {
-  // 声の品質はブラウザ依存。自然な順（Edge の Natural > Google > 標準）で選ぶ
-  const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith("en"));
-  enVoice =
-    vs.find(v => /Natural|Online/.test(v.name) && v.lang === "en-US") ||
-    vs.find(v => /Google/.test(v.name) && v.lang === "en-US") ||
-    vs.find(v => /Samantha|Ava|Allison/.test(v.name)) ||   // iPhone の高品質声
-    vs.find(v => v.lang === "en-US") || vs[0] || null;
+  const list = enVoices();
+  // 端末ごとに選んだ声があればそれを最優先する（自動選択が日によって変わるため）
+  const saved = store.get("voiceEn", "");
+  enVoice = (saved && list.find(v => v.name === saved)) || list[0] || null;
+
   const js = speechSynthesis.getVoices().filter(v => v.lang.startsWith("ja"));
   jaVoice =
     js.find(v => /Natural|Online/.test(v.name)) ||
@@ -9525,7 +9545,11 @@ function pickVoice() {
     js.find(v => /Kyoko|O-?ren/.test(v.name)) ||           // iPhone の高品質声
     js[0] || null;
 }
-speechSynthesis.onvoiceschanged = pickVoice;
+speechSynthesis.onvoiceschanged = () => {
+  // 声は遅れて届くことがある。届いたら選び直し、設定の一覧も出し直す
+  pickVoice();
+  if (view && view.page === "home") render();
+};
 pickVoice();
 
 let ttsUnlocked = false;    // iOS 対策（下の unlockTTS を参照）
@@ -9569,7 +9593,16 @@ function speakCore(text, onend, lang) {
     u.rate = 1.0;
   } else {
     u.lang = "en-US";
-    if (enVoice) u.voice = enVoice;
+    if (enVoice) {
+      u.voice = enVoice;
+    } else {
+      // **英語の声が1つも無い環境では、日本語の声が英語を読んでしまう。**
+      // 何を言っているか分からない音になるので、読み上げない。
+      // 画面（ホームの「読み上げの声」）に理由と直し方を出してある。
+      ttsBusy = false;
+      if (onend) setTimeout(onend, 0);
+      return null;
+    }
     u.rate = settings.rate;
   }
 
@@ -11469,6 +11502,35 @@ function renderHome() {
         <div class="desc">何と言えば何ができるかの一覧。画面ごとに分けてあります</div>
       </div>
     </div>`;
+  const vlist = enVoices();
+  const best = vlist[0];
+  const 警告 = !vlist.length
+    ? `<div class="ai-note" style="color:var(--ng)">
+        <b>この端末には英語の音声が入っていません。</b>英語の読み上げができません。<br>
+        直し方：<b>Microsoft Edge で開く</b>（自然な音声が使えます）か、
+        Windows の［設定］→［時刻と言語］→［音声認識］→［音声を追加］で英語を追加してください。
+       </div>`
+    : (voiceRank(best) >= 9
+        ? `<div class="ai-note" style="color:var(--ng)">
+            <b>機械的に聞こえる古い音声しかありません。</b>
+            <b>Microsoft Edge で開く</b>と自然な音声（Natural）が使えます。
+           </div>`
+        : "");
+  const voiceRow = `
+    <div class="ai-row" id="voiceRow" style="display:block">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>🔊 読み上げの声：</span>
+        <select id="voiceSel" style="flex:1;min-width:180px;padding:6px">
+          ${vlist.length
+            ? vlist.map(v => `<option value="${esc(v.name)}"${
+                enVoice && v.name === enVoice.name ? " selected" : ""}>${
+                esc(v.name)}${voiceRank(v) <= 2 ? "（自然）" : voiceRank(v) >= 9 ? "（機械的）" : ""}</option>`).join("")
+            : `<option>（英語の音声がありません）</option>`}
+        </select>
+        <button id="voiceTest"${vlist.length ? "" : " disabled"}>試す</button>
+      </div>
+      ${警告}
+    </div>`;
   const aiRow = `
     <div class="ai-row" id="aiRow">
       <span class="dot ${chatReady() ? "on" : ""}"></span>
@@ -11487,13 +11549,24 @@ function renderHome() {
           chatLocal ? "" : "（PC経由なので、1回目の返事に少し余分にかかります）"}</div>
       </div>
     </div>` : "";
-  main.innerHTML = fileNote + vocabEntry + freeEntry + guideEntry + aiRow + `<div class="grid">` + DATA.map(c => `
+  main.innerHTML = fileNote + vocabEntry + freeEntry + guideEntry + voiceRow + aiRow + `<div class="grid">` + DATA.map(c => `
     <div class="tile" onclick="openCategory('${c.id}')">
       <div class="emoji">${c.emoji}</div>
       <div class="name">${c.name}</div>
       <div class="desc">${c.desc}</div>
       <div class="meta">${c.scenes.length} シーン ・ 練習 ${c.scenes.reduce((a,s)=>a+(counts[c.id+"/"+s.id]||0),0)} 回</div>
     </div>`).join("") + `</div>`;
+
+  $("voiceSel").onchange = (e) => {
+    store.set("voiceEn", e.target.value);
+    pickVoice();
+    unlockTTS();
+    speak("Hello. This is how I sound.");
+  };
+  $("voiceTest").onclick = () => {
+    unlockTTS();
+    speak("Good morning. How can I help you today?");
+  };
 
   $("aiCfgBtn").onclick = () => {
     const box = $("aiCfg");
