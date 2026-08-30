@@ -9427,6 +9427,9 @@ function renderTip(type, key, backTo) {
 
 // スマホ・タブレットはマウスを乗せる操作が無いので、タップで意味を出す
 const TOUCH = window.matchMedia("(hover: none)").matches;
+// iPhone / iPad かどうか。読み上げの声の増やし方が PC と違うため、案内を出し分ける
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isNarrow = () => window.innerWidth <= 720;
 
 function placeTip(rect) {
@@ -9551,6 +9554,25 @@ speechSynthesis.onvoiceschanged = () => {
   if (view && view.page === "home") render();
 };
 pickVoice();
+
+// **iOS Safari は最初 getVoices() が空を返し、onvoiceschanged が鳴らないことがある。**
+// そのままだと「英語の音声がありません」と誤って出て、読み上げも止まってしまう。
+// 読み込み後しばらく繰り返し確かめ、届いた時点で選び直して画面も出し直す。
+(function waitForVoices() {
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    const n = speechSynthesis.getVoices().length;
+    if (n > 0) {
+      clearInterval(t);
+      const before = enVoice ? enVoice.name : "";
+      pickVoice();
+      if ((enVoice ? enVoice.name : "") !== before && view && view.page === "home") render();
+    } else if (tries >= 12) {      // 約3秒であきらめる
+      clearInterval(t);
+    }
+  }, 250);
+})();
 
 let ttsUnlocked = false;    // iOS 対策（下の unlockTTS を参照）
 
@@ -11504,18 +11526,26 @@ function renderHome() {
     </div>`;
   const vlist = enVoices();
   const best = vlist[0];
+  // 声を増やす方法は端末で違うので、案内を出し分ける。
+  // **読み上げは端末が持っている音声を呼ぶだけ**なので、
+  // 端末に良い声が無ければアプリ側では良くできない。
+  const 増やし方 = IS_IOS
+    ? `［設定］→［アクセシビリティ］→［読み上げコンテンツ］→［声］→［英語］から、
+       <b>高品質な声をダウンロード</b>してください（ダウンロード後にこの画面を開き直すと一覧に出ます）。`
+    : `<b>Microsoft Edge で開く</b>と自然な音声（Natural）が使えます。
+       または Windows の［設定］→［時刻と言語］→［音声認識］→［音声を追加］で英語を追加してください。`;
   const 警告 = !vlist.length
     ? `<div class="ai-note" style="color:var(--ng)">
-        <b>この端末には英語の音声が入っていません。</b>英語の読み上げができません。<br>
-        直し方：<b>Microsoft Edge で開く</b>（自然な音声が使えます）か、
-        Windows の［設定］→［時刻と言語］→［音声認識］→［音声を追加］で英語を追加してください。
+        <b>この端末には英語の音声が入っていません。</b>英語の読み上げができません。<br>${増やし方}
        </div>`
     : (voiceRank(best) >= 9
         ? `<div class="ai-note" style="color:var(--ng)">
-            <b>機械的に聞こえる古い音声しかありません。</b>
-            <b>Microsoft Edge で開く</b>と自然な音声（Natural）が使えます。
+            <b>機械的に聞こえる古い音声しかありません。</b><br>${増やし方}
            </div>`
-        : "");
+        : `<div class="ai-note">
+            声は端末が持っているものから選びます。<b>「試す」で聴き比べて</b>お好みのものにしてください。
+            ${IS_IOS ? "より自然な声は " + 増やし方 : ""}
+           </div>`);
   const voiceRow = `
     <div class="ai-row" id="voiceRow" style="display:block">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
